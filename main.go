@@ -31,6 +31,7 @@ var (
 	cookieTotal    int64
 	cookieValid    int64
 	cookieInvalid  int64
+	currentRunDir  string
 )
 
 func main() {
@@ -91,6 +92,11 @@ func runChecker(console *Console) {
 		console.ReadLine()
 		return
 	}
+
+	currentRunDir = getNextRunDir()
+	os.MkdirAll(filepath.Join(currentRunDir, "minecraft", "all_mc_hits"), 0755)
+	os.MkdirAll(filepath.Join(currentRunDir, "minecraft", "hypixel_hits"), 0755)
+	console.Println(green(fmt.Sprintf("  [✓] Run folder: %s", currentRunDir)))
 
 	var combos []string
 	if _, err := os.Stat("combos.txt"); err == nil {
@@ -422,6 +428,17 @@ func runSetup() {
 		if _, err := os.Stat(name); os.IsNotExist(err) {
 			os.WriteFile(name, []byte(content+"\n"), 0644)
 		}
+	}
+}
+
+func getNextRunDir() string {
+	idx := 1
+	for {
+		name := fmt.Sprintf("R%d", idx)
+		if _, err := os.Stat(name); os.IsNotExist(err) {
+			return name
+		}
+		idx++
 	}
 }
 

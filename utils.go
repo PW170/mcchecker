@@ -29,6 +29,14 @@ func writeToFile(filename, line string) {
 	fmt.Fprintln(f, line)
 }
 
+func copyFile(src, dst string) {
+	input, err := os.ReadFile(src)
+	if err != nil {
+		return
+	}
+	os.WriteFile(dst, input, 0644)
+}
+
 func closeAllFiles() {
 	fileMu.Lock()
 	defer fileMu.Unlock()

