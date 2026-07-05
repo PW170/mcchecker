@@ -5,7 +5,21 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"golang.org/x/sys/windows"
 )
+
+func init() {
+	enableAnsi()
+}
+
+func enableAnsi() {
+	handle := windows.Handle(os.Stdout.Fd())
+	var mode uint32
+	windows.GetConsoleMode(handle, &mode)
+	mode |= windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING
+	windows.SetConsoleMode(handle, mode)
+}
 
 type Console struct {
 	reader *bufio.Reader
