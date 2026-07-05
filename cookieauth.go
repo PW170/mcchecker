@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	mathrand "math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -204,11 +205,15 @@ func cookieFullAuth(client *http.Client, msauthCookie string) (*MCAuthResponse, 
 			body, _ := json.Marshal(payload)
 
 			var mcResp MCAuthResponse
-			var lastMcErr error
-			for retry := 0; retry < 3; retry++ {
+			for retry := 0; retry < 5; retry++ {
 				if retry > 0 {
-					time.Sleep(time.Duration(retry*2) * time.Second)
+					backoff := time.Duration(1<<uint(retry)) * time.Second
+					jitter := time.Duration(mathrand.Int63n(int64(backoff) / 2))
+					time.Sleep(backoff + jitter)
 				}
+
+				mcAuthRateLimiter.Wait()
+
 				mcReq, _ := http.NewRequest("POST", mcAuthURL, strings.NewReader(string(body)))
 				mcReq.Header.Set("Content-Type", "application/json")
 				mcReq.Header.Set("Accept", "application/json")
@@ -216,13 +221,15 @@ func cookieFullAuth(client *http.Client, msauthCookie string) (*MCAuthResponse, 
 
 				mcRespRaw, mcErr := client.Do(mcReq)
 				if mcErr != nil {
-					lastMcErr = fmt.Errorf("minecraft auth request failed: %w", wrapNetError(mcErr))
-					continue
+					return nil, nil, fmt.Errorf("minecraft auth request failed: %w", wrapNetError(mcErr))
 				}
 
 				if mcRespRaw.StatusCode == 429 {
-					lastMcErr = fmt.Errorf("mc auth failed (status 429) — rate limited")
+					lastMcErr := fmt.Errorf("mc auth failed (status 429) — rate limited")
 					mcRespRaw.Body.Close()
+					if retry >= 4 {
+						return nil, nil, lastMcErr
+					}
 					continue
 				}
 				if mcRespRaw.StatusCode == 401 {
@@ -251,7 +258,7 @@ func cookieFullAuth(client *http.Client, msauthCookie string) (*MCAuthResponse, 
 				}
 				return &mcResp, profile, nil
 			}
-			return nil, nil, lastMcErr
+			return nil, nil, fmt.Errorf("mc auth failed after 5 retries")
 		}
 
 		req, _ := http.NewRequest("GET", currentURL, nil)

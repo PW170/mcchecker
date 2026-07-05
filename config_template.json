@@ -4,12 +4,9 @@
 
   "ban_check": true,
   "hypixel_check": true,
-  "donut_check": true,
 
   "include_hypixel": true,
   "include_hypixel_stats": true,
-  "include_donut": true,
-  "include_donut_stats": true,
 
   "ms_rewards": true,
   "xbox_perks": true,
@@ -24,23 +21,14 @@
   "gamepass_pc": true,
   "gamepass_ultimate": true,
 
-  "donut_ban": true,
-  "donut_unbanned": true,
-  "donut_unknown": false,
-  "donut_auto_pay": false,
-  "donut_autopay_target": "",
-
   "hypixel_ban": true,
   "hypixel_unban": true,
   "hypixel_ranked": true,
-  "hypixel_unknown": false,
 
   "webhook": "",
   "default_webhook": "",
   "hypixel_banned_webhook": "",
   "hypixel_unbanned_webhook": "",
-  "donut_banned_webhook": "",
-  "donut_unbanned_webhook": "",
   "xbox_hits_webhook": "",
 
   "rate_limiting": true,

@@ -28,7 +28,6 @@ var (
 	rpHits         int64
 	hypixelBanned  int64
 	hypixelUnban   int64
-	donutUnbanned  int64
 	cookieTotal    int64
 	cookieValid    int64
 	cookieInvalid  int64
@@ -68,6 +67,8 @@ func main() {
 			showCredits(console)
 		case "4":
 			console.Println(yellow("  Goodbye."))
+			console.Println(gray("  Press Enter to exit..."))
+			console.ReadLine()
 			return
 		default:
 			console.Println(red("  Invalid option. Press Enter to continue..."))
@@ -245,7 +246,6 @@ func showConfig(console *Console) {
 	console.Println(white(fmt.Sprintf("  Cookie Check:    %s", boolStr(cfg.CookieCheck))))
 	console.Println(white(fmt.Sprintf("  Cookie Path:     %s", valOr(cfg.CookiePath, "cookies/"))))
 	console.Println(white(fmt.Sprintf("  Hypixel Check:   %s", boolStr(cfg.HypixelCheck))))
-	console.Println(white(fmt.Sprintf("  Donut Check:     %s", boolStr(cfg.DonutCheck))))
 	console.Println(white(fmt.Sprintf("  MS Rewards:      %s", boolStr(cfg.MSRewards))))
 	console.Println(white(fmt.Sprintf("  Xbox Perks:      %s", boolStr(cfg.XboxPerks))))
 	console.Println(white(fmt.Sprintf("  Nitro Promo:     %s", boolStr(cfg.NitroPromo))))
@@ -309,20 +309,16 @@ func loadConfig(path string) (*Config, error) {
 
 func defaultConfig() *Config {
 	return &Config{
-		CookieCheck:     true,
-		CookiePath:      "cookies",
-		BanCheck:        true,
-		HypixelCheck:    true,
-		DonutCheck:      true,
-		IncludeHypixel:  true,
-		IncludeDonut:    true,
-		MSRewards:       true,
-		XboxPerks:       true,
-		GamepassPC:      true,
+		CookieCheck:      true,
+		CookiePath:       "cookies",
+		BanCheck:         true,
+		HypixelCheck:     true,
+		IncludeHypixel:   true,
+		MSRewards:        true,
+		XboxPerks:        true,
+		GamepassPC:       true,
 		GamepassUltimate: true,
-		DonutBan:        true,
-		DonutUnbanned:   true,
-		HypixelBan:      true,
+		HypixelBan:       true,
 		HypixelUnban:    true,
 		HypixelRanked:   true,
 		RateLimiting:    true,
@@ -378,6 +374,8 @@ func printProgress(start time.Time) {
 	rp := atomic.LoadInt64(&rpHits)
 	cv := atomic.LoadInt64(&cookieValid)
 	ci := atomic.LoadInt64(&cookieInvalid)
+	hb := atomic.LoadInt64(&hypixelBanned)
+	hu := atomic.LoadInt64(&hypixelUnban)
 	elapsed := time.Since(start).Seconds()
 	total := checked + atomic.LoadInt64(&cookieTotal)
 	if elapsed < 1 {
@@ -385,8 +383,8 @@ func printProgress(start time.Time) {
 	}
 	cps := float64(total) / elapsed
 	cpm := cps * 60
-	fmt.Printf("\r  [MC: %d] [XGPU: %d] [RP: %d] [Val: %d] [Cook: %d/%d] [Total: %d] [%.0f CPM] [%.1f/s]   ",
-		mc, xgpu, rp, valid, cv, ci, total, cpm, cps)
+	fmt.Printf("\r  [MC: %d] [XGPU: %d] [RP: %d] [Val: %d] [HB:%d/%d] [Cook: %d/%d] [Total: %d] [%.0f CPM] [%.1f/s]   ",
+		mc, xgpu, rp, valid, hb, hu, cv, ci, total, cpm, cps)
 }
 
 func boolStr(b bool) string {
