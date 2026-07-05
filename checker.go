@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,9 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Tnze/go-mc/bot"
 	"github.com/Tnze/go-mc/chat"
-	"github.com/Tnze/go-mc/net"
-	"github.com/Tnze/go-mc/net/packet"
 )
 
 func checkAccount(email, password, proxyURL string, cfg *Config) {
@@ -779,65 +779,40 @@ func getCurrentTimestamp() int64 {
 }
 
 func checkHypixelBan(username, uuidStr, accessToken string) string {
-	conn, err := net.DialMCTimeout("mc.hypixel.net:25565", 10*time.Second)
-	if err != nil {
-		return fmt.Sprintf("ban: connection failed (%v)", err)
-	}
-	defer conn.Close()
-
-	// Handshake: protocol 47 (1.8), next state 2 (login)
-	handshake := packet.Marshal(0x00,
-		packet.VarInt(47),
-		packet.String("mc.hypixel.net"),
-		packet.UnsignedShort(25565),
-		packet.VarInt(2),
-	)
-	if err := conn.WritePacket(handshake); err != nil {
-		return fmt.Sprintf("ban: handshake failed (%v)", err)
+	c := bot.NewClient()
+	c.Auth = bot.Auth{
+		Name: username,
+		UUID: uuidStr,
+		AsTk: accessToken,
 	}
 
-	// Login Start
-	loginStart := packet.Marshal(0x00, packet.String(username))
-	if err := conn.WritePacket(loginStart); err != nil {
-		return fmt.Sprintf("ban: login start failed (%v)", err)
+	err := c.JoinServer("mc.hypixel.net:25565")
+	if err == nil {
+		c.Close()
+		return "hypixel: unbanned"
 	}
 
-	// Read response
-	var p packet.Packet
-	if err := conn.ReadPacket(&p); err != nil {
-		return fmt.Sprintf("ban: read failed (%v)", err)
-	}
+	var disconnect chat.Message
+	if errors.As(err, &disconnect) {
+		reasonStr := disconnect.ClearString()
 
-	switch p.ID {
-	case 0x00: // Login Disconnect — banned or other disconnect
-		var reason chat.Message
-		if err := p.Scan(&reason); err != nil {
-			return fmt.Sprintf("ban: parse error (%v)", err)
-		}
-		reasonStr := reason.ClearString()
-
-		if strings.Contains(reasonStr, "temporarily banned") {
+		switch {
+		case strings.Contains(reasonStr, "temporarily banned"):
 			return "hypixel: banned (temp)"
-		}
-		if strings.Contains(reasonStr, "permanently banned") ||
-			strings.Contains(reasonStr, "Suspicious activity") {
+		case strings.Contains(reasonStr, "permanently banned"),
+			strings.Contains(reasonStr, "You are permanently banned"):
 			return "hypixel: banned (permanent)"
-		}
-		if strings.Contains(reasonStr, "is currently closed") ||
-			strings.Contains(reasonStr, "Failed cloning") {
+		case strings.Contains(reasonStr, "Suspicious activity"):
+			return "hypixel: banned (permanent - suspicious activity)"
+		case strings.Contains(reasonStr, "is currently closed"),
+			strings.Contains(reasonStr, "Failed cloning"):
 			return "hypixel: unbanned"
+		default:
+			return fmt.Sprintf("hypixel: banned (%s)", truncateStr(reasonStr, 60))
 		}
-		return fmt.Sprintf("hypixel: banned (%s)", truncateStr(reasonStr, 60))
-
-	case 0x01: // Encryption Request — not banned
-		return "hypixel: unbanned"
-
-	case 0x02: // Login Success — not banned
-		return "hypixel: unbanned"
-
-	default:
-		return fmt.Sprintf("hypixel: unknown (packet ID 0x%x)", p.ID)
 	}
+
+	return fmt.Sprintf("hypixel: error (%v)", err)
 }
 
 func truncateStr(s string, max int) string {
