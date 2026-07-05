@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,14 @@ var (
 	cookieInvalid  int64
 	currentRunDir  string
 )
+
+type cookieXboxResult struct {
+	client     *http.Client
+	cookieFile string
+	rawLines   []string
+	uhs        string
+	bearer     string
+}
 
 func main() {
 	exe, _ := os.Executable()
@@ -188,22 +197,80 @@ func runChecker(console *Console) {
 		}(email, password)
 	}
 
-	cookieWorkers := 15
-	cookieSem := make(chan struct{}, cookieWorkers)
-	var cookieWg sync.WaitGroup
+	msChan := make(chan cookieXboxResult, 200)
+	var stage1Wg sync.WaitGroup
 	for _, cf := range cookieFiles {
-		cookieSem <- struct{}{}
-		cookieWg.Add(1)
+		stage1Wg.Add(1)
 		go func(cf string) {
-			defer cookieWg.Done()
-			defer func() { <-cookieSem }()
+			defer stage1Wg.Done()
 			proxyURL := pickProxy(proxies, cfg.ProxyMode)
-			checkCookies(cf, proxyURL, cfg)
-			printProgress(startTime)
+			client := buildHTTPClient(proxyURL)
+
+			atomic.AddInt64(&cookieTotal, 1)
+			cookies, rawLines, err := parseCookieFile(cf)
+			if err != nil {
+				ce := categorizeCookieError(fmt.Errorf("parse error: %w", err))
+				atomic.AddInt64(&cookieInvalid, 1)
+				safeWrite("cookie_errors.log", fmt.Sprintf("[PARSE] %s | %s | %s", cf, ce.Category, ce.Detail))
+				fmt.Printf("\n  [PARSE_ERR] %s | %s", cf, ce.Detail)
+				printProgress(startTime)
+				return
+			}
+
+			msauthCookie, ok := cookies["__Host-MSAAUTHP"]
+			if !ok {
+				atomic.AddInt64(&cookieInvalid, 1)
+				safeWrite("cookie_errors.log", fmt.Sprintf("[MISSING] %s | No __Host-MSAAUTHP cookie found", cf))
+				fmt.Printf("\n  [MISSING] %s | no __Host-MSAAUTHP cookie", cf)
+				printProgress(startTime)
+				return
+			}
+
+			uhs, bearer, err := cookieXboxAuth(client, msauthCookie)
+			if err != nil {
+				ce := categorizeCookieError(err)
+				atomic.AddInt64(&cookieInvalid, 1)
+				logLine := fmt.Sprintf("[%s] %s | %s", ce.Category, cf, ce.Detail)
+				safeWrite("cookie_errors.log", logLine)
+				switch ce.Category {
+				case "EXPIRED", "AUTH_FAILED", "MC_REJECTED":
+					safeWrite("cookie_invalid.txt", fmt.Sprintf("%s | %s: %s", cf, ce.Category, ce.Message))
+					fmt.Printf("\n  [%s] %s | %s", ce.Category, cf, ce.Message)
+				case "TIMEOUT", "NETWORK":
+					safeWrite("cookie_network_errors.log", logLine)
+					fmt.Printf("\n  [%s] %s", ce.Category, cf)
+				case "RATE_LIMITED":
+					safeWrite("cookie_rate_limited.log", logLine)
+					fmt.Printf("\n  [RATE_LIMITED] %s", cf)
+				default:
+					safeWrite("cookie_unknown_errors.log", logLine)
+					fmt.Printf("\n  [COOKIE_ERR] %s | %s", cf, ce.Message)
+				}
+				printProgress(startTime)
+				return
+			}
+
+			msChan <- cookieXboxResult{client: client, cookieFile: cf, rawLines: rawLines, uhs: uhs, bearer: bearer}
 		}(cf)
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
-	cookieWg.Wait()
+
+	go func() {
+		stage1Wg.Wait()
+		close(msChan)
+	}()
+
+	var stage2Wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		stage2Wg.Add(1)
+		go func() {
+			defer stage2Wg.Done()
+			for data := range msChan {
+				processCookieStage2(data, cfg)
+			}
+		}()
+	}
+	stage2Wg.Wait()
 
 	wg.Wait()
 

@@ -130,11 +130,10 @@ func buildNoRedirectClient() *http.Client {
 	}
 }
 
-func cookieFullAuth(client *http.Client, msauthCookie string) (*MCAuthResponse, *MCProfile, error) {
+func cookieXboxAuth(client *http.Client, msauthCookie string) (uhs, bearer string, err error) {
 	noRedirect := buildNoRedirectClient()
 	ua := "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0"
 
-	// Step 1: Request Xbox SISU with MSAAUTHP cookie
 	xboxURL := fmt.Sprintf("https://sisu.xboxlive.com/connect/XboxLive/?state=login&cobrandId=%s&tid=%s&ru=https://www.minecraft.net/en-us/login&aid=%s",
 		uuidV4(), randomDigitStr(9), randomDigitStr(10))
 
@@ -145,23 +144,21 @@ func cookieFullAuth(client *http.Client, msauthCookie string) (*MCAuthResponse, 
 
 	resp1, err := noRedirect.Do(req1)
 	if err != nil {
-		return nil, nil, fmt.Errorf("xbox sisu failed: %w", wrapNetError(err))
+		return "", "", fmt.Errorf("xbox sisu failed: %w", wrapNetError(err))
 	}
 
 	if resp1.StatusCode != 302 && resp1.StatusCode != 301 {
 		body, _ := io.ReadAll(resp1.Body)
 		resp1.Body.Close()
-		return nil, nil, fmt.Errorf("no redirect from xbox sisu (HTTP %d): %s", resp1.StatusCode, string(body[:min(len(body), 200)]))
+		return "", "", fmt.Errorf("no redirect from xbox sisu (HTTP %d): %s", resp1.StatusCode, string(body[:min(len(body), 200)]))
 	}
 
 	sisuLoc := resp1.Header.Get("Location")
 	resp1.Body.Close()
 	if sisuLoc == "" {
-		return nil, nil, fmt.Errorf("xbox sisu returned %d but Location header is empty", resp1.StatusCode)
+		return "", "", fmt.Errorf("xbox sisu returned %d but Location header is empty", resp1.StatusCode)
 	}
 
-	// Step 2: Follow redirect to login.live.com OAuth, but strip nopa=2
-	// nopa=2 disables passive cookie auth, which causes 400 Bad Request
 	parsedURL, _ := url.Parse(sisuLoc)
 	q := parsedURL.Query()
 	q.Del("nopa")
@@ -174,91 +171,30 @@ func cookieFullAuth(client *http.Client, msauthCookie string) (*MCAuthResponse, 
 
 	resp2, err := noRedirect.Do(req2)
 	if err != nil {
-		return nil, nil, fmt.Errorf("login.live.com oauth failed: %w", wrapNetError(err))
+		return "", "", fmt.Errorf("login.live.com oauth failed: %w", wrapNetError(err))
 	}
 
 	if resp2.StatusCode != 302 && resp2.StatusCode != 301 {
 		body, _ := io.ReadAll(resp2.Body)
 		resp2.Body.Close()
-		return nil, nil, fmt.Errorf("login.live.com oauth rejected cookie (HTTP %d): %s", resp2.StatusCode, string(body[:min(len(body), 200)]))
+		return "", "", fmt.Errorf("login.live.com oauth rejected cookie (HTTP %d): %s", resp2.StatusCode, string(body[:min(len(body), 200)]))
 	}
 
 	codeLoc := resp2.Header.Get("Location")
 	resp2.Body.Close()
 	if codeLoc == "" {
-		return nil, nil, fmt.Errorf("login.live.com returned %d but no Location header", resp2.StatusCode)
+		return "", "", fmt.Errorf("login.live.com returned %d but no Location header", resp2.StatusCode)
 	}
 
-	// Step 3: Follow redirect back to SISU with auth code
-	// This redirect chain ends at minecraft.net with the access token in the fragment
 	currentURL := codeLoc
 	for i := 0; i < 10; i++ {
 		parsed, _ := url.Parse(currentURL)
 		if parsed != nil && parsed.Fragment != "" {
 			uhs, bearer, err := decodeXboxFragment(parsed.Fragment)
 			if err != nil {
-				return nil, nil, fmt.Errorf("failed to decode xbox auth fragment: %w", err)
+				return "", "", fmt.Errorf("failed to decode xbox auth fragment: %w", err)
 			}
-
-			identityToken := fmt.Sprintf("XBL3.0 x=%s;%s", uhs, bearer)
-			payload := map[string]string{"identityToken": identityToken}
-			body, _ := json.Marshal(payload)
-
-			var mcResp MCAuthResponse
-			for retry := 0; retry < 5; retry++ {
-				if retry > 0 {
-					backoff := time.Duration(1<<uint(retry)) * time.Second
-					jitter := time.Duration(mathrand.Int63n(int64(backoff) / 2))
-					time.Sleep(backoff + jitter)
-				}
-
-				mcAuthRateLimiter.Wait()
-
-				mcReq, _ := http.NewRequest("POST", mcAuthURL, strings.NewReader(string(body)))
-				mcReq.Header.Set("Content-Type", "application/json")
-				mcReq.Header.Set("Accept", "application/json")
-				mcReq.Header.Set("User-Agent", UserAgent)
-
-				mcRespRaw, mcErr := client.Do(mcReq)
-				if mcErr != nil {
-					return nil, nil, fmt.Errorf("minecraft auth request failed: %w", wrapNetError(mcErr))
-				}
-
-				if mcRespRaw.StatusCode == 429 {
-					lastMcErr := fmt.Errorf("mc auth failed (status 429) — rate limited")
-					mcRespRaw.Body.Close()
-					if retry >= 4 {
-						return nil, nil, lastMcErr
-					}
-					continue
-				}
-				if mcRespRaw.StatusCode == 401 {
-					mcRespRaw.Body.Close()
-					return nil, nil, fmt.Errorf("mc auth failed (status 401) — xbox token rejected")
-				}
-				if mcRespRaw.StatusCode != 200 {
-					b, _ := io.ReadAll(mcRespRaw.Body)
-					mcRespRaw.Body.Close()
-					return nil, nil, fmt.Errorf("mc auth failed (status %d): %s", mcRespRaw.StatusCode, string(b[:min(len(b), 200)]))
-				}
-
-				if err := json.NewDecoder(mcRespRaw.Body).Decode(&mcResp); err != nil {
-					mcRespRaw.Body.Close()
-					return nil, nil, fmt.Errorf("mc auth response parse failed: %w", err)
-				}
-				mcRespRaw.Body.Close()
-
-				if mcResp.AccessToken == "" {
-					return nil, nil, fmt.Errorf("mc auth returned empty access token")
-				}
-
-				profile, err := getMinecraftProfile(client, mcResp.AccessToken)
-				if err != nil {
-					return &mcResp, nil, nil
-				}
-				return &mcResp, profile, nil
-			}
-			return nil, nil, fmt.Errorf("mc auth failed after 5 retries")
+			return uhs, bearer, nil
 		}
 
 		req, _ := http.NewRequest("GET", currentURL, nil)
@@ -267,22 +203,91 @@ func cookieFullAuth(client *http.Client, msauthCookie string) (*MCAuthResponse, 
 
 		resp, err := noRedirect.Do(req)
 		if err != nil {
-			return nil, nil, fmt.Errorf("redirect chain failed at step %d: %w", i+1, wrapNetError(err))
+			return "", "", fmt.Errorf("redirect chain failed at step %d: %w", i+1, wrapNetError(err))
 		}
 
 		if resp.StatusCode != 302 && resp.StatusCode != 301 {
 			resp.Body.Close()
-			return nil, nil, fmt.Errorf("redirect chain ended at step %d (HTTP %d) without token", i+1, resp.StatusCode)
+			return "", "", fmt.Errorf("redirect chain ended at step %d (HTTP %d) without token", i+1, resp.StatusCode)
 		}
 
 		currentURL = resp.Header.Get("Location")
 		resp.Body.Close()
 		if currentURL == "" {
-			return nil, nil, fmt.Errorf("redirect chain broken at step %d — empty Location", i+1)
+			return "", "", fmt.Errorf("redirect chain broken at step %d — empty Location", i+1)
 		}
 	}
 
-	return nil, nil, fmt.Errorf("redirect chain exceeded maximum depth (10)")
+	return "", "", fmt.Errorf("redirect chain exceeded maximum depth (10)")
+}
+
+func cookieMCAuth(client *http.Client, uhs, bearer string) (*MCAuthResponse, *MCProfile, error) {
+	identityToken := fmt.Sprintf("XBL3.0 x=%s;%s", uhs, bearer)
+	payload := map[string]string{"identityToken": identityToken}
+	body, _ := json.Marshal(payload)
+
+	var mcResp MCAuthResponse
+	for retry := 0; retry < 5; retry++ {
+		if retry > 0 {
+			backoff := time.Duration(1<<uint(retry)) * time.Second
+			jitter := time.Duration(mathrand.Int63n(int64(backoff) / 2))
+			time.Sleep(backoff + jitter)
+		}
+
+		mcAuthRateLimiter.Wait()
+
+		mcReq, _ := http.NewRequest("POST", mcAuthURL, strings.NewReader(string(body)))
+		mcReq.Header.Set("Content-Type", "application/json")
+		mcReq.Header.Set("Accept", "application/json")
+		mcReq.Header.Set("User-Agent", UserAgent)
+
+		mcRespRaw, mcErr := client.Do(mcReq)
+		if mcErr != nil {
+			return nil, nil, fmt.Errorf("minecraft auth request failed: %w", wrapNetError(mcErr))
+		}
+
+		if mcRespRaw.StatusCode == 429 {
+			mcRespRaw.Body.Close()
+			if retry >= 4 {
+				return nil, nil, fmt.Errorf("mc auth failed (status 429) — rate limited after 5 retries")
+			}
+			continue
+		}
+		if mcRespRaw.StatusCode == 401 {
+			mcRespRaw.Body.Close()
+			return nil, nil, fmt.Errorf("mc auth failed (status 401) — xbox token rejected")
+		}
+		if mcRespRaw.StatusCode != 200 {
+			b, _ := io.ReadAll(mcRespRaw.Body)
+			mcRespRaw.Body.Close()
+			return nil, nil, fmt.Errorf("mc auth failed (status %d): %s", mcRespRaw.StatusCode, string(b[:min(len(b), 200)]))
+		}
+
+		if err := json.NewDecoder(mcRespRaw.Body).Decode(&mcResp); err != nil {
+			mcRespRaw.Body.Close()
+			return nil, nil, fmt.Errorf("mc auth response parse failed: %w", err)
+		}
+		mcRespRaw.Body.Close()
+
+		if mcResp.AccessToken == "" {
+			return nil, nil, fmt.Errorf("mc auth returned empty access token")
+		}
+
+		profile, err := getMinecraftProfile(client, mcResp.AccessToken)
+		if err != nil {
+			return &mcResp, nil, nil
+		}
+		return &mcResp, profile, nil
+	}
+	return nil, nil, fmt.Errorf("mc auth failed after 5 retries")
+}
+
+func cookieFullAuth(client *http.Client, msauthCookie string) (*MCAuthResponse, *MCProfile, error) {
+	uhs, bearer, err := cookieXboxAuth(client, msauthCookie)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cookieMCAuth(client, uhs, bearer)
 }
 
 func min(a, b int) int {
