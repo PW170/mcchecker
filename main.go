@@ -37,6 +37,8 @@ func main() {
 	exe, _ := os.Executable()
 	os.Chdir(filepath.Dir(exe))
 
+	runSetup()
+
 	console := NewConsole()
 	console.Clear()
 
@@ -399,6 +401,28 @@ func valOr(s, def string) string {
 		return def
 	}
 	return s
+}
+
+func runSetup() {
+	os.MkdirAll("cookies", 0755)
+	os.MkdirAll("results", 0755)
+	os.MkdirAll("errors", 0755)
+
+	if _, err := os.Stat("config.json"); os.IsNotExist(err) {
+		def := defaultConfig()
+		data, _ := json.MarshalIndent(def, "", "  ")
+		os.WriteFile("config.json", data, 0644)
+	}
+
+	placeholders := map[string]string{
+		"combos.txt":  "; Paste your email:password combos here, one per line",
+		"proxies.txt": "; Paste your proxies here, one per line (http://user:pass@ip:port)",
+	}
+	for name, content := range placeholders {
+		if _, err := os.Stat(name); os.IsNotExist(err) {
+			os.WriteFile(name, []byte(content+"\n"), 0644)
+		}
+	}
 }
 
 func cyan(s string) string  { return "\033[36m" + s + "\033[0m" }
