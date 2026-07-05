@@ -42,16 +42,8 @@ type MCAuthResponse struct {
 }
 
 type MCProfile struct {
-	ID     string        `json:"id"`
-	Name   string        `json:"name"`
-	Capes  []MCCape `json:"capes"`
-}
-
-type MCCape struct {
-	ID      string `json:"id"`
-	Alias   string `json:"alias"`
-	State   string `json:"state"`
-	URL     string `json:"url"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 func fullAuth(email, password, proxyURL string) (*MCAuthResponse, *MCProfile, error) {

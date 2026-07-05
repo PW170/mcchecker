@@ -38,11 +38,5 @@
     "retry_rate_limited":  true,
     "proxy_mode":  "",
     "show_hits":  true,
-    "author":  "",
-    "hypixel_plancke_stats":  true,
-    "optifine_cape":  true,
-    "minecraft_capes":  true,
-    "email_access":  true,
-    "namechange_check":  true,
-    "donut_smp_stats":  true
+    "author":  ""
 }
