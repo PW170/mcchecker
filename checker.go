@@ -1,9 +1,7 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,9 +11,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/Tnze/go-mc/bot"
-	"github.com/Tnze/go-mc/chat"
 )
 
 func checkAccount(email, password, proxyURL string, cfg *Config) {
@@ -652,65 +647,6 @@ func runSniper(client *http.Client, accessToken, currentName string) {
 
 func getCurrentTimestamp() int64 {
 	return time.Now().UnixMilli()
-}
-
-func checkHypixelBan(username, uuidStr, accessToken string) string {
-	hypixelHosts := []string{"mc.hypixel.net:25565", "hypixel.net:25565"}
-	if username == "Unknown" || uuidStr == "" || accessToken == "" {
-		return "hypixel: error (missing account info)"
-	}
-
-	for _, host := range hypixelHosts {
-		c := bot.NewClient()
-		c.Auth = bot.Auth{
-			Name: username,
-			UUID: uuidStr,
-			AsTk: accessToken,
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err := c.JoinServerWithOptions(host, bot.JoinOptions{Context: ctx})
-		cancel()
-
-		if err == nil {
-			c.Close()
-			return "hypixel: unbanned"
-		}
-
-		var disconnect bot.DisconnectErr
-		if errors.As(err, &disconnect) {
-			reasonStr := chat.Message(disconnect).ClearString()
-			reasonLower := strings.ToLower(reasonStr)
-
-			switch {
-			case strings.Contains(reasonStr, "is currently closed"),
-				strings.Contains(reasonStr, "Failed cloning"):
-				continue
-
-			case strings.Contains(reasonLower, "you are banned"),
-				strings.Contains(reasonLower, "permanently banned"),
-				strings.Contains(reasonStr, "You are permanently banned"):
-				return "hypixel: banned (permanent)"
-			case strings.Contains(reasonLower, "temporarily banned"),
-				strings.Contains(reasonLower, "temporary ban"):
-				return "hypixel: banned (temp)"
-			case strings.Contains(reasonStr, "Suspicious activity"):
-				return "hypixel: banned (permanent - suspicious activity)"
-			case strings.Contains(reasonLower, "security ban"):
-				return "hypixel: banned (security)"
-			default:
-				return fmt.Sprintf("hypixel: banned (%s)", truncateStr(reasonStr, 80))
-			}
-		}
-
-		if strings.Contains(err.Error(), "dial tcp") || strings.Contains(err.Error(), "i/o timeout") {
-			continue
-		}
-
-		return fmt.Sprintf("hypixel: error (%v)", err)
-	}
-
-	return "hypixel: unbanned"
 }
 
 func truncateStr(s string, max int) string {
