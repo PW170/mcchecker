@@ -7,6 +7,8 @@ results/
 errors/
 release/cookies/
 release/results/
+release/R*/
+R*/
 release/*.log
 release/donut_*.txt
 release/cookie_*.txt
