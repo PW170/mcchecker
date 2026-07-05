@@ -35,6 +35,9 @@ var (
 )
 
 func main() {
+	exe, _ := os.Executable()
+	os.Chdir(filepath.Dir(exe))
+
 	console := NewConsole()
 	console.Clear()
 
