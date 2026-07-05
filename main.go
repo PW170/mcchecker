@@ -179,7 +179,8 @@ func runChecker(console *Console) {
 		}(email, password)
 	}
 
-	cookieSem := make(chan struct{}, 5)
+	cookieWorkers := 15
+	cookieSem := make(chan struct{}, cookieWorkers)
 	var cookieWg sync.WaitGroup
 	for _, cf := range cookieFiles {
 		cookieSem <- struct{}{}
@@ -191,7 +192,7 @@ func runChecker(console *Console) {
 			checkCookies(cf, proxyURL, cfg)
 			printProgress(startTime)
 		}(cf)
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 	cookieWg.Wait()
 

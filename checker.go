@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -786,7 +787,9 @@ func checkHypixelBan(username, uuidStr, accessToken string) string {
 		AsTk: accessToken,
 	}
 
-	err := c.JoinServer("mc.hypixel.net:25565")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	err := c.JoinServerWithOptions("mc.hypixel.net:25565", bot.JoinOptions{Context: ctx})
 	if err == nil {
 		c.Close()
 		return "hypixel: unbanned"
