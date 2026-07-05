@@ -214,7 +214,14 @@ func runChecker(console *Console) {
 	console.Println(white(fmt.Sprintf("  Cookies Valid:   %d", cookieValid)))
 	console.Println(white(fmt.Sprintf("  Cookies Invalid: %d", cookieInvalid)))
 	console.Println("")
+	elapsedSecs := time.Since(startTime).Seconds()
+	cpm := float64(0)
+	if elapsedSecs > 0 {
+		totalDone := float64(atomic.LoadInt64(&totalChecked) + atomic.LoadInt64(&cookieTotal))
+		cpm = totalDone / elapsedSecs * 60
+	}
 	console.Println(white(fmt.Sprintf("  Time Elapsed:    %s", time.Since(startTime).Round(time.Second))))
+	console.Println(white(fmt.Sprintf("  Average CPM:     %.0f", cpm)))
 	console.Println(green("\n  ────────────────────────────────────────────"))
 	console.Println(gray("\n  Press Enter to return to menu..."))
 	console.ReadLine()
@@ -372,9 +379,13 @@ func printProgress(start time.Time) {
 	ci := atomic.LoadInt64(&cookieInvalid)
 	elapsed := time.Since(start).Seconds()
 	total := checked + atomic.LoadInt64(&cookieTotal)
+	if elapsed < 1 {
+		elapsed = 1
+	}
 	cps := float64(total) / elapsed
-	fmt.Printf("\r  [MC: %d] [XGPU: %d] [RP: %d] [Val: %d] [Cook: %d/%d] [Total: %d] [%.1f/s]   ",
-		mc, xgpu, rp, valid, cv, ci, total, cps)
+	cpm := cps * 60
+	fmt.Printf("\r  [MC: %d] [XGPU: %d] [RP: %d] [Val: %d] [Cook: %d/%d] [Total: %d] [%.0f CPM] [%.1f/s]   ",
+		mc, xgpu, rp, valid, cv, ci, total, cpm, cps)
 }
 
 func boolStr(b bool) string {
