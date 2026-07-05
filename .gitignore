@@ -1,0 +1,11 @@
+*.exe
+*.log
+combos.txt
+proxies.txt
+results/
+errors/
+release/cookies/
+release/cookie_*.txt
+release/cookies_*.txt
+*.swp
+*.swo
