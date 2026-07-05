@@ -283,14 +283,44 @@ func printBanner(c *Console) {
 func loadConfig(path string) (*Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		def := defaultConfig()
+		data, _ := json.MarshalIndent(def, "", "  ")
+		os.WriteFile(path, data, 0644)
+		return def, nil
 	}
 	defer f.Close()
 	var cfg Config
 	if err := json.NewDecoder(f).Decode(&cfg); err != nil {
-		return nil, err
+		def := defaultConfig()
+		data, _ := json.MarshalIndent(def, "", "  ")
+		os.WriteFile(path, data, 0644)
+		return def, nil
 	}
 	return &cfg, nil
+}
+
+func defaultConfig() *Config {
+	return &Config{
+		CookieCheck:     true,
+		CookiePath:      "cookies",
+		BanCheck:        true,
+		HypixelCheck:    true,
+		DonutCheck:      true,
+		IncludeHypixel:  true,
+		IncludeDonut:    true,
+		MSRewards:       true,
+		XboxPerks:       true,
+		GamepassPC:      true,
+		GamepassUltimate: true,
+		DonutBan:        true,
+		DonutUnbanned:   true,
+		HypixelBan:      true,
+		HypixelUnban:    true,
+		HypixelRanked:   true,
+		RateLimiting:    true,
+		RetryRateLimited: true,
+		ShowHits:        true,
+	}
 }
 
 func loadFile(path string) ([]string, error) {
