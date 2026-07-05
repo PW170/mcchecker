@@ -232,6 +232,9 @@ func runChecker(console *Console) {
 	}
 	console.Println(white(fmt.Sprintf("  Time Elapsed:    %s", time.Since(startTime).Round(time.Second))))
 	console.Println(white(fmt.Sprintf("  Average CPM:     %.0f", cpm)))
+	console.Println("")
+	console.Println(white(fmt.Sprintf("  Hypixel Banned:  %d", atomic.LoadInt64(&hypixelBanned))))
+	console.Println(white(fmt.Sprintf("  Hypixel Unban:   %d", atomic.LoadInt64(&hypixelUnban))))
 	console.Println(green("\n  ────────────────────────────────────────────"))
 	console.Println(gray("\n  Press Enter to return to menu..."))
 	console.ReadLine()
