@@ -104,7 +104,8 @@ func runChecker(console *Console) {
 
 	currentRunDir = getNextRunDir()
 	os.MkdirAll(filepath.Join(currentRunDir, "minecraft", "all_mc_hits"), 0755)
-	os.MkdirAll(filepath.Join(currentRunDir, "minecraft", "hypixel_hits"), 0755)
+	os.MkdirAll(filepath.Join(currentRunDir, "minecraft", "hypixel_hits", "banned"), 0755)
+	os.MkdirAll(filepath.Join(currentRunDir, "minecraft", "hypixel_hits", "unbanned"), 0755)
 	console.Println(green(fmt.Sprintf("  [✓] Run folder: %s", currentRunDir)))
 
 	var combos []string
@@ -504,7 +505,7 @@ func runSetup() {
 func getNextRunDir() string {
 	idx := 1
 	for {
-		name := fmt.Sprintf("R%d", idx)
+		name := filepath.Join("results", fmt.Sprintf("R%d", idx))
 		if _, err := os.Stat(name); os.IsNotExist(err) {
 			return name
 		}

@@ -118,7 +118,11 @@ func processCookieStage2(data cookieXboxResult, cfg *Config) {
 
 	banInfo := ""
 	if cfg.HypixelBan && username != "Unknown" {
-		banInfo = checkHypixelBan(username, uuid, accessToken)
+		bi, err := checkHypixelBan(username, uuid, accessToken)
+		if err != nil {
+			logError("value_check_errors.log", cookieFile+" hypixelban", err)
+		}
+		banInfo = bi
 		if strings.Contains(banInfo, "banned") {
 			atomic.AddInt64(&hypixelBanned, 1)
 			safeWrite(filepath.Join(rd, "hypixel_ban.txt"), banInfo)
@@ -150,10 +154,12 @@ func processCookieStage2(data cookieXboxResult, cfg *Config) {
 	}
 
 	if currentRunDir != "" {
-		baseName := filepath.Base(cookieFile)
-		copyFile(cookieFile, filepath.Join(currentRunDir, "minecraft", "all_mc_hits", baseName))
+		cookieName := username + ".txt"
+		copyFile(cookieFile, filepath.Join(currentRunDir, "minecraft", "all_mc_hits", cookieName))
 		if strings.Contains(banInfo, "unbanned") {
-			copyFile(cookieFile, filepath.Join(currentRunDir, "minecraft", "hypixel_hits", baseName))
+			copyFile(cookieFile, filepath.Join(currentRunDir, "minecraft", "hypixel_hits", "unbanned", cookieName))
+		} else if strings.Contains(banInfo, "banned") {
+			copyFile(cookieFile, filepath.Join(currentRunDir, "minecraft", "hypixel_hits", "banned", cookieName))
 		}
 	}
 

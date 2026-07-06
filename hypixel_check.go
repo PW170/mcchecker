@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,117 +25,186 @@ import (
 
 const hypixelProtocol = 47
 
-func checkHypixelBan(username, uuidStr, accessToken string) string {
+var hypixelHosts = []string{"mc.hypixel.net:25565", "hypixel.net:25565"}
+
+func checkHypixelBan(username, uuidStr, accessToken string) (string, error) {
 	if username == "Unknown" || uuidStr == "" || accessToken == "" {
-		return "hypixel: error (missing account info)"
+		return "", fmt.Errorf("hypixel: missing account info")
 	}
 
-	hypixelHosts := []string{"mc.hypixel.net:25565", "hypixel.net:25565"}
+	var lastErr error
 	for _, host := range hypixelHosts {
-		result := tryHypixelConnect(host, username, uuidStr, accessToken)
-		if result != "" {
-			return result
+		result, err := tryHypixelConnect(host, username, uuidStr, accessToken)
+		if err != nil {
+			lastErr = err
+			continue
 		}
+		return result, nil
 	}
-	return "hypixel: unbanned"
+
+	if lastErr != nil {
+		return "", fmt.Errorf("hypixel: all hosts failed: %w", lastErr)
+	}
+	return "hypixel: unbanned", nil
 }
 
-func tryHypixelConnect(addr, username, uuidStr, accessToken string) string {
+func tryHypixelConnect(addr, username, uuidStr, accessToken string) (string, error) {
 	conn, err := mcnet.DialMCTimeout(addr, 30*time.Second)
 	if err != nil {
-		if strings.Contains(err.Error(), "dial tcp") || strings.Contains(err.Error(), "i/o timeout") {
-			return ""
-		}
-		return ""
+		return "", fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
 
-	err = conn.WritePacket(pk.Marshal(
+	if err := conn.WritePacket(pk.Marshal(
 		0x00,
 		pk.VarInt(hypixelProtocol),
 		pk.String(addr),
 		pk.UnsignedShort(25565),
 		pk.VarInt(2),
-	))
-	if err != nil {
-		return ""
+	)); err != nil {
+		return "", fmt.Errorf("handshake: %w", err)
 	}
 
-	err = conn.WritePacket(pk.Marshal(
+	if err := conn.WritePacket(pk.Marshal(
 		0x00,
 		pk.String(username),
-	))
-	if err != nil {
-		return ""
+	)); err != nil {
+		return "", fmt.Errorf("login start: %w", err)
 	}
 
+	loggedIn := false
+	playDeadline := time.Now().Add(20 * time.Second)
+
 	for {
+		if loggedIn && time.Now().After(playDeadline) {
+			return "hypixel: unbanned", nil
+		}
+
+		if loggedIn {
+			conn.Socket.SetReadDeadline(time.Now().Add(10 * time.Second))
+		}
+
 		var p pk.Packet
 		if err := conn.ReadPacket(&p); err != nil {
-			return ""
+			if loggedIn {
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					return "hypixel: unbanned", nil
+				}
+				return "", fmt.Errorf("play read: %w", err)
+			}
+			return "", fmt.Errorf("read packet: %w", err)
+		}
+
+		if loggedIn {
+			switch p.ID {
+			case 0x01:
+				return "hypixel: unbanned", nil
+			case 0x40:
+				var reason chat.Message
+				if err := p.Scan(&reason); err != nil {
+					return "hypixel: unbanned", nil
+				}
+				return parseBanReason(reason), nil
+			case 0x00:
+				continue
+			default:
+				continue
+			}
 		}
 
 		switch p.ID {
-		case 0x00: // Login Disconnect
+		case 0x00:
 			var reason chat.Message
 			if err := p.Scan(&reason); err != nil {
-				return ""
+				return "", fmt.Errorf("parse disconnect: %w", err)
 			}
-			reasonStr := reason.ClearString()
-			reasonLower := strings.ToLower(reasonStr)
+			return parseBanReason(reason), nil
 
-			switch {
-			case strings.Contains(reasonStr, "is currently closed"),
-				strings.Contains(reasonStr, "Failed cloning"):
-				return ""
-
-			case strings.Contains(reasonLower, "you are banned"),
-				strings.Contains(reasonLower, "permanently banned"),
-				strings.Contains(reasonStr, "You are permanently banned"):
-				return "hypixel: banned (permanent)"
-			case strings.Contains(reasonLower, "temporarily banned"),
-				strings.Contains(reasonLower, "temporary ban"):
-				return "hypixel: banned (temp)"
-			case strings.Contains(reasonStr, "Suspicious activity"):
-				return "hypixel: banned (permanent - suspicious activity)"
-			case strings.Contains(reasonLower, "security ban"):
-				return "hypixel: banned (security)"
-
-			case strings.Contains(reasonLower, "cannot be used to play on hypixel"),
-				strings.Contains(reasonLower, "unsupported"),
-				strings.Contains(reasonLower, "version"):
-				return ""
-
-			default:
-				return fmt.Sprintf("hypixel: banned (%s)", truncateStr(reasonStr, 80))
-			}
-
-		case 0x01: // Encryption Request
+		case 0x01:
 			var er encryptionReq
 			if err := p.Scan(&er); err != nil {
-				return ""
+				return "", fmt.Errorf("parse encryption: %w", err)
 			}
 			if err := handleHypixelEncryption(conn, accessToken, username, uuidStr, er); err != nil {
-				return ""
+				return "", fmt.Errorf("encryption: %w", err)
 			}
 
-		case 0x02: // Login Success
-			return "hypixel: unbanned"
+		case 0x02:
+			loggedIn = true
 
-		case 0x03: // Set Compression
+		case 0x03:
 			var threshold pk.VarInt
 			if err := p.Scan(&threshold); err != nil {
-				return ""
+				return "", fmt.Errorf("parse compression: %w", err)
 			}
 			conn.SetThreshold(int(threshold))
 
 		default:
-			if p.ID == 0x02 || p.ID == 0x03 {
-				continue
-			}
-			return "hypixel: unbanned"
+			return "", fmt.Errorf("unexpected packet id 0x%02x", p.ID)
 		}
 	}
+}
+
+func parseBanReason(msg chat.Message) string {
+	text := msg.ClearString()
+	text = strings.ReplaceAll(text, "\n", " | ")
+	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
+	text = strings.TrimSpace(text)
+
+	lower := strings.ToLower(text)
+
+	banType := ""
+	banDur := ""
+	banReason := ""
+
+	if strings.Contains(lower, "permanently banned") || strings.Contains(lower, "permanent ban") {
+		banType = "permanent"
+	} else if strings.Contains(lower, "temporarily banned") || strings.Contains(lower, "temporary ban") {
+		banType = "temporary"
+	} else if strings.Contains(lower, "security ban") {
+		banType = "security"
+	} else if strings.Contains(lower, "suspicious") {
+		banType = "permanent"
+		banReason = "Suspicious activity"
+	} else {
+		banType = "temporary"
+	}
+
+	if banDur == "" {
+		durRe := regexp.MustCompile(`(?i)(?:for|banned for)\s+(\d+)\s*(day|days|hour|hours|minute|minutes|month|months|year|years)`)
+		if m := durRe.FindStringSubmatch(text); len(m) >= 3 {
+			banDur = m[1] + " " + m[2]
+		}
+	}
+	if banDur == "" && banType == "permanent" {
+		banDur = "permanent"
+	}
+
+	if banReason == "" {
+		reasonRe := regexp.MustCompile(`(?i)reason:\s*(.+?)(?:\.|\||$)`)
+		if m := reasonRe.FindStringSubmatch(text); len(m) >= 2 {
+			banReason = strings.TrimSpace(m[1])
+		}
+	}
+
+	result := "hypixel: banned"
+	if banType != "" {
+		result += " (" + banType
+	}
+	if banDur != "" {
+		if banType != "" {
+			result += " - " + banDur
+		} else {
+			result += " (" + banDur
+		}
+	}
+	if banReason != "" {
+		result += " - " + banReason
+	}
+	if banType != "" || banDur != "" || banReason != "" {
+		result += ")"
+	}
+	return result
 }
 
 type encryptionReq struct {
@@ -189,7 +260,6 @@ func handleHypixelEncryption(conn *mcnet.Conn, accessToken, username, uuidStr st
 		return err
 	}
 	conn.SetCipher(CFB8.NewCFB8Encrypt(b, key), CFB8.NewCFB8Decrypt(b, key))
-
 	return nil
 }
 

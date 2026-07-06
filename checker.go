@@ -166,7 +166,11 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 
 	banInfo := ""
 	if cfg.HypixelBan && username != "Unknown" {
-		banInfo = checkHypixelBan(username, uuid, accessToken)
+		bi, err := checkHypixelBan(username, uuid, accessToken)
+		if err != nil {
+			logError("value_check_errors.log", email+" hypixelban", err)
+		}
+		banInfo = bi
 		if strings.Contains(banInfo, "banned") {
 			atomic.AddInt64(&hypixelBanned, 1)
 			writeToFile("hypixel_ban.txt", fmt.Sprintf("%s:%s | %s | %s", email, password, username, banInfo))
@@ -202,7 +206,9 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 		ref := fmt.Sprintf("%s:%s | %s | %s | GP: %s | Ban: %s\n", email, password, username, uuid, gamepassResult, banInfo)
 		safeWrite(filepath.Join(currentRunDir, "minecraft", "all_mc_hits", "combos.txt"), ref)
 		if strings.Contains(banInfo, "unbanned") {
-			safeWrite(filepath.Join(currentRunDir, "minecraft", "hypixel_hits", "combos.txt"), ref)
+			safeWrite(filepath.Join(currentRunDir, "minecraft", "hypixel_hits", "unbanned", "combos.txt"), ref)
+		} else if strings.Contains(banInfo, "banned") {
+			safeWrite(filepath.Join(currentRunDir, "minecraft", "hypixel_hits", "banned", "combos.txt"), ref)
 		}
 	}
 
