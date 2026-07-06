@@ -87,6 +87,9 @@ body {
 .btn-stop:disabled { opacity: .4; cursor: not-allowed; }
 .btn-primary { background: var(--accent); color: #000; padding: 8px 20px; font-size: 14px; }
 .btn-primary:hover { opacity: .85; }
+.btn-import { background: var(--orange); color: #000; }
+.btn-import:hover { opacity: .85; }
+.btn-sep { width: 1px; height: 24px; background: var(--border); display: inline-block; }
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);

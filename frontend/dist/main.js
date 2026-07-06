@@ -171,6 +171,15 @@ $('btn-stop').addEventListener('click', function() {
   $('bottom-status').textContent = 'Stopping...';
 });
 
+$('btn-import').addEventListener('click', function() {
+  var threads = parseInt($('threads').value) || 50;
+  $('log-area').innerHTML = '';
+  $('bottom-status').textContent = 'Importing ZIP...';
+  var stats = ['stat-mc','stat-xgpu','stat-rp','stat-valid','stat-hbanned','stat-hunban','stat-cvalid','stat-cinvalid','stat-cpm','stat-time'];
+  stats.forEach(function(id) { $(id).textContent = '0'; });
+  window.go.main.App.ImportZip(threads);
+});
+
 $('btn-save-config').addEventListener('click', function() {
   var cfg = readConfigFromForm();
   var json = JSON.stringify(cfg, null, 2);
