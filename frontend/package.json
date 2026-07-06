@@ -1,0 +1,8 @@
+{
+  "name": "mcchecker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "mkdir -p dist && cp src/*.html dist/ && cp src/*.js dist/ && cp src/*.css dist/ 2>/dev/null; echo 'build ok'"
+  }
+}

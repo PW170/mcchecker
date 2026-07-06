@@ -10,3 +10,14 @@
 
 - GoLang installed
 - Python installed
+- WebView2 Runtime (included with Windows 11, or download from Microsoft)
+
+## Build
+
+```bash
+# GUI version (default)
+wails build
+
+# Terminal version
+go build -tags terminal
+```

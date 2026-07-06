@@ -1,5 +1,8 @@
 *.exe
 *.log
+build/bin/
+frontend/node_modules/
+frontend/wailsjs/
 config.json
 combos.txt
 proxies.txt

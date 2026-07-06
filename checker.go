@@ -26,45 +26,45 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 		case "INVALID_CREDENTIALS":
 			atomic.AddInt64(&invalidCount, 1)
 			writeToFile("invalid.txt", fmt.Sprintf("[%s] %s:%s | %s", ts, email, password, ce.Message))
-			fmt.Printf("\n  [INVALID] %s:%s | %s", email, password, ce.Message)
+			logLine("[INVALID] %s:%s | %s", email, password, ce.Message)
 
 		case "LOCKED":
 			atomic.AddInt64(&lockedCount, 1)
 			line := fmt.Sprintf("[%s] [LOCKED] %s:%s | %s", ts, email, password, ce.Detail)
 			writeToFile("ms_valid.txt", line)
-			fmt.Printf("\n  [LOCKED] %s:%s | %s", email, password, ce.Detail)
+			logLine("[LOCKED] %s:%s | %s", email, password, ce.Detail)
 
 		case "RATE_LIMITED":
 			if cfg.RetryRateLimited {
-				fmt.Printf("\n  [RATE_LIMITED] Retrying %s...", email)
+				logLine("[RATE_LIMITED] Retrying %s...", email)
 				mcToken, profile, err = fullAuth(email, password, proxyURL)
 				if err != nil {
 					ce2 := categorizeAuthError(err)
 					writeToFile("ms_valid.txt", fmt.Sprintf("[%s] [RATE_LIMITED] %s:%s | %s", ts, email, password, ce2.Detail))
 					logError("errors.log", email, err)
-					fmt.Printf("\n  [RATE_LIMITED] %s:%s | %s", email, password, ce2.Detail)
+					logLine("[RATE_LIMITED] %s:%s | %s", email, password, ce2.Detail)
 					return
 				}
-				fmt.Printf("\n  [OK] %s:%s | retry succeeded", email, password)
+				logLine("[OK] %s:%s | retry succeeded", email, password)
 			} else {
 				writeToFile("ms_valid.txt", fmt.Sprintf("[%s] [RATE_LIMITED] %s:%s", ts, email, password))
-				fmt.Printf("\n  [RATE_LIMITED] %s:%s", email, password)
+				logLine("[RATE_LIMITED] %s:%s", email, password)
 				return
 			}
 
 		case "VERIFY_REQUIRED":
 			writeToFile("ms_valid.txt", fmt.Sprintf("[%s] [VERIFY] %s:%s", ts, email, password))
-			fmt.Printf("\n  [VERIFY] %s:%s", email, password)
+			logLine("[VERIFY] %s:%s", email, password)
 
 		case "TIMEOUT", "NETWORK":
 			writeToFile("ms_valid.txt", fmt.Sprintf("[%s] [%s] %s:%s | %s", ts, ce.Category, email, password, ce.Detail))
 			logError("network_errors.log", email, err)
-			fmt.Printf("\n  [%s] %s:%s | %s", ce.Category, email, password, ce.Detail)
+			logLine("[%s] %s:%s | %s", ce.Category, email, password, ce.Detail)
 
 		default:
 			writeToFile("ban_check_unknown_errors.txt", fmt.Sprintf("[%s] %s:%s | %s", ts, email, password, ce.Detail))
 			logError("errors.log", email, err, proxyURL)
-			fmt.Printf("\n  [ERROR] %s:%s | %s", email, password, ce.Detail)
+			logLine("[ERROR] %s:%s | %s", email, password, ce.Detail)
 		}
 		return
 	}
@@ -111,7 +111,7 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 		msBalance = bal
 		if msBalance != "" && msBalance != "0" {
 			writeToFile("ms_balance_hits.txt", fmt.Sprintf("%s:%s | Balance: %s", email, password, msBalance))
-			fmt.Printf("\n  [BALANCE] %s | $%s\n", username, msBalance)
+			logLine("[BALANCE] %s | $%s", username, msBalance)
 		}
 	}
 
@@ -134,7 +134,7 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 		}
 		if perks {
 			writeToFile("valid_xbox_codes.txt", fmt.Sprintf("%s:%s | Xbox Perks: Yes", email, password))
-			fmt.Printf("\n  [PERKS] %s\n", username)
+			logLine("[PERKS] %s", username)
 		}
 	}
 
@@ -174,11 +174,11 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 		if strings.Contains(banInfo, "banned") {
 			atomic.AddInt64(&hypixelBanned, 1)
 			writeToFile("hypixel_ban.txt", fmt.Sprintf("%s:%s | %s | %s", email, password, username, banInfo))
-			fmt.Printf("\n  [HYPIXEL] %s | %s", username, banInfo)
+			logHypixel("[HYPIXEL] %s | %s", username, banInfo)
 		} else if strings.Contains(banInfo, "unbanned") {
 			atomic.AddInt64(&hypixelUnban, 1)
 			writeToFile("hypixel_unban.txt", fmt.Sprintf("%s:%s | %s | %s", email, password, username, banInfo))
-			fmt.Printf("\n  [HYPIXEL] %s | %s", username, banInfo)
+			logHypixel("[HYPIXEL] %s | %s", username, banInfo)
 		}
 	}
 
@@ -212,7 +212,7 @@ func checkAccount(email, password, proxyURL string, cfg *Config) {
 		}
 	}
 
-	fmt.Printf("\n  [HIT] %s | %s | GP: %s\n", username, uuid, gamepassResult)
+	logLine("[HIT] %s | %s | GP: %s", username, uuid, gamepassResult)
 }
 
 func resultsDir(cookieFile string) string {
@@ -461,7 +461,7 @@ func runSniper(client *http.Client, accessToken, currentName string) {
 		logError("sniper_errors.log", currentName, fmt.Errorf("sniper returned status %d", resp.StatusCode))
 		return
 	}
-	fmt.Printf("\n  [SNIPER] %s | Status: %d\n", currentName, resp.StatusCode)
+	logLine("[SNIPER] %s | Status: %d", currentName, resp.StatusCode)
 }
 
 func getCurrentTimestamp() int64 {
@@ -474,5 +474,3 @@ func truncateStr(s string, max int) string {
 	}
 	return s[:max] + "..."
 }
-
-

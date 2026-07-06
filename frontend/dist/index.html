@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCChecker</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="sidebar">
+    <div class="logo">MC<span>Checker</span></div>
+    <nav>
+      <button class="tab-btn active" data-tab="checker">
+        <span class="tab-icon">&#9762;</span> Checker
+      </button>
+      <button class="tab-btn" data-tab="config">
+        <span class="tab-icon">&#9881;</span> Config
+      </button>
+      <button class="tab-btn" data-tab="results">
+        <span class="tab-icon">&#9776;</span> Results
+      </button>
+    </nav>
+  </div>
+
+  <div class="main-content">
+    <!-- CHECKER TAB -->
+    <div id="tab-checker" class="tab-content active">
+      <div class="checker-header">
+        <div class="checker-controls">
+          <div class="threads-group">
+            <label>Threads:</label>
+            <input type="number" id="threads" value="50" min="1" max="200">
+          </div>
+          <button id="btn-start" class="btn btn-start">&#9654; Start</button>
+          <button id="btn-stop" class="btn btn-stop" disabled>&#9632; Stop</button>
+        </div>
+        <div class="run-dir" id="run-dir"></div>
+      </div>
+
+      <div class="stats-grid" id="stats-grid">
+        <div class="stat-card"><span class="stat-label">MC Hits</span><span class="stat-value" id="stat-mc">0</span></div>
+        <div class="stat-card"><span class="stat-label">XGPU</span><span class="stat-value" id="stat-xgpu">0</span></div>
+        <div class="stat-card"><span class="stat-label">RP Hits</span><span class="stat-value" id="stat-rp">0</span></div>
+        <div class="stat-card"><span class="stat-label">Valid</span><span class="stat-value" id="stat-valid">0</span></div>
+        <div class="stat-card"><span class="stat-label">HB Banned</span><span class="stat-value" id="stat-hbanned">0</span></div>
+        <div class="stat-card"><span class="stat-label">HB Unban</span><span class="stat-value" id="stat-hunban">0</span></div>
+        <div class="stat-card"><span class="stat-label">Cook Valid</span><span class="stat-value" id="stat-cvalid">0</span></div>
+        <div class="stat-card"><span class="stat-label">Cook Invalid</span><span class="stat-value" id="stat-cinvalid">0</span></div>
+        <div class="stat-card"><span class="stat-label">CPM</span><span class="stat-value" id="stat-cpm">0</span></div>
+        <div class="stat-card"><span class="stat-label">Time</span><span class="stat-value" id="stat-time">0:00</span></div>
+      </div>
+
+      <div class="log-area" id="log-area">
+        <div class="log-placeholder">Logs will appear here...</div>
+      </div>
+    </div>
+
+    <!-- CONFIG TAB -->
+    <div id="tab-config" class="tab-content">
+      <h2>Configuration</h2>
+      <div class="config-form" id="config-form"></div>
+      <div class="config-actions">
+        <button id="btn-save-config" class="btn btn-primary">&#10003; Save Config</button>
+        <span id="config-status" class="config-status"></span>
+      </div>
+    </div>
+
+    <!-- RESULTS TAB -->
+    <div id="tab-results" class="tab-content">
+      <h2>Last Run Results</h2>
+      <div class="results-grid" id="results-grid">
+        <div class="result-card"><span class="result-label">Accounts Checked</span><span class="result-value" id="res-checked">-</span></div>
+        <div class="result-card"><span class="result-label">MC Hits</span><span class="result-value" id="res-mc">-</span></div>
+        <div class="result-card"><span class="result-label">XGPU Hits</span><span class="result-value" id="res-xgpu">-</span></div>
+        <div class="result-card"><span class="result-label">RP Hits</span><span class="result-value" id="res-rp">-</span></div>
+        <div class="result-card"><span class="result-label">Hypixel Banned</span><span class="result-value" id="res-hbanned">-</span></div>
+        <div class="result-card"><span class="result-label">Hypixel Unban</span><span class="result-value" id="res-hunban">-</span></div>
+        <div class="result-card"><span class="result-label">Cookies Valid</span><span class="result-value" id="res-cvalid">-</span></div>
+        <div class="result-card"><span class="result-label">Cookies Invalid</span><span class="result-value" id="res-cinvalid">-</span></div>
+        <div class="result-card"><span class="result-label">CPM</span><span class="result-value" id="res-cpm">-</span></div>
+        <div class="result-card"><span class="result-label">Time</span><span class="result-value" id="res-time">-</span></div>
+      </div>
+      <div class="results-actions">
+        <button id="btn-open-run" class="btn btn-primary">&#128193; Open Run Folder</button>
+        <button id="btn-open-results" class="btn btn-primary">&#128193; Open Results Folder</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="bottom-status" class="bottom-status">Ready.</div>
+
+  <script src="main.js"></script>
+</body>
+</html>
