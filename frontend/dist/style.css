@@ -38,6 +38,7 @@ body {
   border-bottom: 1px solid var(--border);
 }
 .logo span { color: var(--accent); }
+.edition { font-size: 11px; color: var(--orange); padding: 0 16px 12px; font-weight: 600; letter-spacing: .5px; border-bottom: 1px solid var(--border); }
 .sidebar nav { display: flex; flex-direction: column; padding: 8px; gap: 4px; }
 .tab-btn {
   background: transparent;
